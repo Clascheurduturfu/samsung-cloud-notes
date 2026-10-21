@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Original artwork (see scripts/make-icon.swift): white page, folded corner, three lines. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="1024"
+    android:viewportHeight="1024">
+    <group
+        android:pivotX="512"
+        android:pivotY="512"
+        android:scaleX="0.82"
+        android:scaleY="0.82">
+        <path
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M294,195 L720,195 Q762,195 762,237 L762,777 Q762,819 720,819 L294,819 Q252,819 252,777 L252,237 Q252,195 294,195 Z" />
+        <path
+            android:fillColor="#FFFFCCB8"
+            android:pathData="M638,195 L762,319 L638,319 Z" />
+        <path
+            android:strokeColor="#FFFA471F"
+            android:strokeWidth="27"
+            android:strokeLineCap="round"
+            android:pathData="M342,424 L655,424 M342,522 L655,522 M342,620 L655,620" />
+    </group>
+</vector>

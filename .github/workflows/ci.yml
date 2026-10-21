@@ -19,6 +19,31 @@ jobs:
           persist-credentials: false
       - name: Compile both architectures and run offline self-tests
         run: bash scripts/check-macos.sh
+  ios:
+    name: iOS simulator build and offline self-tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build for the simulator and run shared self-tests
+        run: bash scripts/check-ios.sh
+  android:
+    name: Android unit tests and debug build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - name: Run JVM unit tests and assemble a debug APK
+        run: bash scripts/check-android.sh
   windows:
     name: Windows connection helper tests
     runs-on: windows-latest

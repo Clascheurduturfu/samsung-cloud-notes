@@ -1,5 +1,7 @@
 import Foundation
+#if os(macOS)
 import AppKit
+#endif
 import SwiftUI
 #if canImport(FoundationXML)
 import FoundationXML

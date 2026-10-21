@@ -1,5 +1,9 @@
 import Foundation
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import AuthenticationServices
 import CommonCrypto
 import CryptoKit
@@ -127,7 +131,14 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
     private var web: ASWebAuthenticationSession?
     private var renewal: Task<AccountSession, Error>?
     private let transport = URLSession(configuration: .ephemeral, delegate: AuthRedirectGuard(), delegateQueue: nil)
+    #if os(macOS)
     func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { NSApp.keyWindow ?? NSApp.mainWindow ?? NSWindow() }
+    #else
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.flatMap(\.windows).first(where: \.isKeyWindow) ?? scenes.first.map { UIWindow(windowScene: $0) } ?? UIWindow()
+    }
+    #endif
     private func request(_ url: URL, form: [String: String]? = nil, json: [String: Any]? = nil, headers: [String: String] = [:], method: String? = nil) async throws -> [String: Any] {
         guard url.scheme == "https", url.user == nil, url.password == nil, url.port == nil || url.port == 443,
               let host = url.host, host == "account.samsung.com" || host.hasSuffix(".samsungosp.com") || host == "api.samsungcloud.com" || host == "play.samsungcloud.com" else { throw NotesError.message("Samsung returned an untrusted sign-in destination.") }
@@ -168,7 +179,7 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
             }
             web = session; session.presentationContextProvider = self
             session.prefersEphemeralWebBrowserSession = false
-            if !session.start(), !completed { completed = true; web = nil; continuation.resume(throwing: NotesError.message("macOS could not open Samsung sign-in.")) }
+            if !session.start(), !completed { completed = true; web = nil; continuation.resume(throwing: NotesError.message("This device could not open Samsung sign-in.")) }
         }
     }
     func signIn(status: (String) -> Void) async throws -> NativeCredentials {
@@ -183,7 +194,7 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
         // The SDK entry point whitelists Android browser package identifiers even
         // on macOS. This compatibility value selects its standard web flow;
         // the actual browser, device name and OS remain those of this Mac.
-        let payload: [String: Any] = ["clientId": Self.masterClient, "code_challenge": SamsungAuthCrypto.challenge(verifier), "code_challenge_method": "S256", "competitorDeviceYNFlag": "Y", "countryCode": "fr", "deviceInfo": "Google|com.android.chrome", "deviceModelID": "Mac", "deviceName": "Samsung Cloud Notes for Mac", "deviceOSVersion": ProcessInfo.processInfo.operatingSystemVersionString, "devicePhysicalAddressText": "MAC:" + device, "deviceType": "APP", "deviceUniqueID": device, "redirect_uri": Self.redirect, "replaceableClientConnectYN": "N", "replaceableClientId": "", "replaceableDevicePhysicalAddressText": "", "responseEncryptionType": "1", "responseEncryptionYNFlag": "Y", "scope": "", "state": state, "svcIptLgnID": "", "iosYNFlag": "Y"]
+        let payload: [String: Any] = ["clientId": Self.masterClient, "code_challenge": SamsungAuthCrypto.challenge(verifier), "code_challenge_method": "S256", "competitorDeviceYNFlag": "Y", "countryCode": "fr", "deviceInfo": "Google|com.android.chrome", "deviceModelID": ClientPlatform.model, "deviceName": ClientPlatform.deviceName, "deviceOSVersion": ProcessInfo.processInfo.operatingSystemVersionString, "devicePhysicalAddressText": "MAC:" + device, "deviceType": "APP", "deviceUniqueID": device, "redirect_uri": Self.redirect, "replaceableClientConnectYN": "N", "replaceableClientId": "", "replaceableDevicePhysicalAddressText": "", "responseEncryptionType": "1", "responseEncryptionYNFlag": "Y", "scope": "", "state": state, "svcIptLgnID": "", "iosYNFlag": "Y"]
         var target = URLComponents(url: uri, resolvingAgainstBaseURL: false)!
         target.queryItems = [URLQueryItem(name: "locale", value: "en-US"), URLQueryItem(name: "svcParam", value: try SamsungAuthCrypto.envelope(payload, iterations: rounds, publicKey: key)), URLQueryItem(name: "mode", value: "C")]
         let started = Date(); status("Complete sign-in in Samsung's secure browser window…")
@@ -209,7 +220,7 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
         }
         let code = try SamsungAuthCrypto.callback(field("code"), key: responseKey)
         let login = try SamsungAuthCrypto.callback(field("retValue"), key: responseKey)
-        status("Authorizing this Mac with Samsung…")
+        status("Authorizing this device with Samsung…")
         let secureServer = URL(string: "https://" + host)!
         let result = try await request(secureServer.appendingPathComponent("auth/oauth2/authenticate"), form: ["grant_type": "authorization_code", "serviceType": "M", "client_id": Self.masterClient, "code": code, "code_verifier": verifier, "username": login, "physical_address_text": device])
         guard let token = (result["userauth_token"] ?? result["userAuthToken"]) as? String, let user = (result["userId"] ?? result["user_id"]) as? String, !token.isEmpty, !user.isEmpty else { throw NotesError.message("Samsung did not issue a reusable account connection.") }
@@ -224,13 +235,13 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
         var target = URLComponents(string: value.authServer + "/auth/oauth2/v2/authorize")!
         target.queryItems = ["response_type": "code", "serviceType": "M", "client_id": Self.notesClient, "code_challenge": SamsungAuthCrypto.challenge(verifier), "code_challenge_method": "S256", "childAccountSupported": "Y", "userauth_token": value.masterToken, "physical_address_text": value.deviceID, "login_id": value.loginID].sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
         let authorization = try await request(target.url!)
-        guard let code = authorization["code"] as? String else { throw NotesError.message("Samsung did not authorize Notes for this Mac.") }
+        guard let code = authorization["code"] as? String else { throw NotesError.message("Samsung did not authorize Notes for this device.") }
         if let authData = authorization["auth_data"] as? [String: Any], let user = authData["userId"] as? String { value.userID = user }
         let token = try await request(URL(string: value.authServer + "/auth/oauth2/token")!, form: ["grant_type": "authorization_code", "code": code, "client_id": Self.notesClient, "client_secret": "", "physical_address_text": value.deviceID, "code_verifier": verifier])
         return try self.token(token, updating: value)
     }
     private func headers(_ credentials: NativeCredentials) -> [String: String] {
-        ["x-sc-app-id": Self.notesClient, "x-sc-access-token": credentials.accessToken, "x-sc-uid": credentials.userID, "User-Agent": "SamsungCloudNotes-macOS/" + appVersion]
+        ["x-sc-app-id": Self.notesClient, "x-sc-access-token": credentials.accessToken, "x-sc-uid": credentials.userID, "User-Agent": ClientPlatform.userAgent]
     }
     private func token(_ response: [String: Any], updating original: NativeCredentials) throws -> NativeCredentials {
         guard let access = response["access_token"] as? String, !access.isEmpty else { throw NotesError.message("Samsung did not issue a Notes access token.") }
@@ -257,7 +268,7 @@ private final class AuthRedirectGuard: NSObject, URLSessionTaskDelegate {
         if value.registrationID.isEmpty || value.registeredAppVersion != appShortVersion {
             // This server accepts the Android SDK compatibility profile, while
             // retaining an explicit Mac model/alias. No Android code is bundled.
-            let registration = try await request(URL(string: "https://play.samsungcloud.com/identity/v1/register")!, json: ["app": ["version": appShortVersion], "device": ["osType": "android", "osVersion": "35", "platformVersion": "6.0.0", "type": "phone", "countryCode": "FRA", "modelName": "Mac", "alias": "Samsung Cloud Notes for Mac", "osUserId": "0"]], headers: h)
+            let registration = try await request(URL(string: "https://play.samsungcloud.com/identity/v1/register")!, json: ["app": ["version": appShortVersion], "device": ["osType": "android", "osVersion": "35", "platformVersion": "6.0.0", "type": "phone", "countryCode": "FRA", "modelName": ClientPlatform.model, "alias": ClientPlatform.deviceName, "osUserId": "0"]], headers: h)
             guard let id = registration["registrationId"] as? String, !id.isEmpty else { throw NotesError.message("Samsung did not issue a Notes registration ID.") }
             value.registrationID = id; value.registeredAppVersion = appShortVersion
             value.cloudAuthorization = ""; value.cloudExpires = .distantPast

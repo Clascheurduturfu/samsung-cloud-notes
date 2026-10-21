@@ -2,7 +2,7 @@
 
 ## Reporting
 
-Use **Security → Report a vulnerability** when available. If private reporting is unavailable, open an issue asking for a private contact without vulnerability details or sensitive attachments. Never post live credentials or private notes. The current 1.0 release is the supported version; no response time or Samsung support is guaranteed.
+Use **Security → Report a vulnerability** when available. If private reporting is unavailable, open an issue asking for a private contact without vulnerability details or sensitive attachments. Never post live credentials or private notes. The current 1.1 release is the supported version; no response time or Samsung support is guaranteed.
 
 ## Keep private
 
@@ -16,7 +16,9 @@ Documented public client/package/callback identifiers are protocol constants, no
 
 ## Storage and logout
 
-The Mac saves credentials through its signed Keychain helper. Caches/drafts/backups under `~/Library/Application Support/SamsungCloudNotes/` contain private note content and are not separately encrypted by the app.
+The Mac saves credentials through its signed Keychain helper. Caches/drafts/backups under `~/Library/Application Support/SamsungCloudNotes/` contain private note content and are not separately encrypted by the app. The `scnotes` command line runs inside the same signed executable and uses the same helper; its output (including `--json` and `--xml`) contains note content.
+
+The iOS app stores credentials in its own Keychain items (this device only, after first unlock). The Android app seals them with a non-exportable Android Keystore key in no-backup storage and disables Android backup and device transfer for all its data. Mobile caches/drafts/backups live in each app's private sandbox, protected by the OS but not separately encrypted by the app.
 
 Logout removes this app's saved authorization/session, clears the visible library and cancels renewal. It retains cache/drafts and does not revoke every server token, remove browser sessions or erase all local content.
 

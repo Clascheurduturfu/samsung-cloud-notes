@@ -35,3 +35,12 @@ Thumbs.db
 .vscode/
 *.xcuserstate
 xcuserdata/
+# Android
+android/local.properties
+android/.gradle/
+android/.kotlin/
+android/app/build/
+*.apk
+*.aab
+*.jks
+*.keystore

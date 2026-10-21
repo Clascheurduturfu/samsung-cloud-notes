@@ -247,11 +247,19 @@ See [protocol.md](protocol.md) for the request and XML details. The important fi
 - Uploads use multipart `noteResource` XML. Fetch the current commit before saving, retain a backup and download after upload to check the title/body. A stale-write test was rejected without changing the isolated test note.
 - The revision preflight is not proof of atomic server compare-and-swap. Complete Samsung-device rendering, advanced pen/page effects and full `.sdocx` interoperability remain separate work.
 
+## Mobile clients (1.1)
+
+- The Mac's SDK entry point, encrypted `svcParam`, `ms-app://…` redirect, Notes authorization and Android-profile registration were reused unchanged on iOS and Android. Only the visible device fields differ: model (`iPhone`, `iPad` or Android `Build.MODEL`), name/alias (*Samsung Cloud Notes for iPhone/iPad/Android*), OS version and user agent.
+- iOS: `ASWebAuthenticationSession` accepts the `ms-app` callback scheme exactly as on macOS. A native simulator sign-in, registration and library sync succeeded.
+- Android: a Custom Tab can return the callback because the app registers an intent filter for the redirect's scheme and host. The registration body keeps the verified `osVersion` 35 / `platformVersion` 6.0.0 profile rather than the device's real SDK level.
+- On a fresh Android emulator, the first SDK sign-in page answered **Access denied — unusual activity (400)** before the form. Controlled reloads then showed the normal form for both the Mac-identical and the Android device fields, and the app's own flow succeeded after the browser had visited account.samsung.com once. The denial therefore tracks the browser profile's history (Samsung's risk check), not the payload.
+- Foundation's `XMLDocument` is unavailable on iOS. The portable tree preserves attribute order, comments, processing instructions, CDATA and whitespace, and rejects DTDs; its serialization of the self-test fixture is checked against Foundation on macOS.
+
 ## Verification boundary and reproducibility
 
 The original native checks loaded 35 records, restored them in cache-only mode, downloaded zero unchanged documents on a warm refresh, decoded five drawing pages/772 strokes and passed isolated Unicode write/readback/conflict checks. These counts describe the test library, not a product limit or synthetic demo.
 
-Relevant code: `Sources/Authentication.swift`, `Sources/Credentials.swift`, `Sources/Cloud.swift`, `Sources/Cache.swift`, `Sources/Drawing.swift`, `Sources/App.swift` and the signing/credential scripts. Diagnostic flags include `--self-test`, `--verify-native`, `--verify-cache`, `--verify-previews`, `--verify-cloud` and the isolated-note guarded `--test-save`. The sign-out diagnostic verifies local credential removal and restores the existing connection in memory afterward.
+Relevant code: `Sources/Shared/Authentication.swift`, `Sources/macOS/Credentials.swift`, `Sources/Shared/Cloud.swift`, `Sources/Shared/Cache.swift`, `Sources/Shared/Drawing.swift`, `Sources/macOS/App.swift` and the signing/credential scripts; the Android equivalents live in `android/app/src/main/java/local/samsungcloudnotes/`. Diagnostic flags include `--self-test`, `--verify-native`, `--verify-cache`, `--verify-previews`, `--verify-cloud` and the isolated-note guarded `--test-save`. The sign-out diagnostic verifies local credential removal and restores the existing connection in memory afterward.
 
 Do not publish research databases, traces, DPAPI captures, live connections, signed download URLs, private binary projects, browser callback URLs from active attempts or loose signing keys. Public protocol client IDs above should not be confused with user tokens.
 

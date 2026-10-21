@@ -5,7 +5,7 @@ import FoundationXML
 import CryptoKit
 import Security
 
-let appVersion = "1.0.0"
+let appVersion = "1.1.0"
 let appShortVersion = appVersion.components(separatedBy: "-")[0]
 var transientSession: AccountSession?
 
@@ -221,14 +221,14 @@ final class CloudClient {
         request.setValue("4000", forHTTPHeaderField: "x-sn-app-ver")
         request.setValue("2", forHTTPHeaderField: "X-SN-XML-VER")
         request.setValue("O4vARCbQ3G", forHTTPHeaderField: "X-SN-Feature-ID")
-        request.setValue("SamsungCloudNotes-macOS/\(appVersion)", forHTTPHeaderField: "User-Agent")
-        request.setValue(Data("Mac".utf8).base64EncodedString(), forHTTPHeaderField: "x-sn-model-name")
+        request.setValue(ClientPlatform.userAgent, forHTTPHeaderField: "User-Agent")
+        request.setValue(Data(ClientPlatform.model.utf8).base64EncodedString(), forHTTPHeaderField: "x-sn-model-name")
         if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
         let (data, response) = try await transport.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw NotesError.message("No response from Samsung Cloud.") }
         if http.statusCode == 401 || http.statusCode == 403 {
             if account.nativeID != nil, attempt == 0 { account = try await SamsungSignIn.shared.renew(account, force: true); continue }
-            throw NotesError.message(account.nativeID == nil ? "This imported connection expired. Sign in with Samsung on this Mac, or import a refreshed Windows connection." : "Samsung rejected the renewed connection. Sign in with Samsung again.")
+            throw NotesError.message(account.nativeID == nil ? "This imported connection expired. Sign in with Samsung on this device, or import a refreshed Windows connection." : "Samsung rejected the renewed connection. Sign in with Samsung again.")
         }
         guard (200..<300).contains(http.statusCode) else {
             let xml = try? XMLDocument(data: data, options: [.nodeLoadExternalEntitiesNever])

@@ -257,8 +257,14 @@ struct NotesRootView: View {
 @main struct SamsungCloudNotesApp: App {
     init() {
         if ProcessInfo.processInfo.arguments.contains("--self-test") {
-            do { try SelfTest.run(); print("Offline self-tests passed."); exit(0) }
-            catch { print("Self-test failed: \(error.localizedDescription)"); exit(1) }
+            let result: String
+            do { try SelfTest.run(); result = "Offline self-tests passed." }
+            catch { result = "Self-test failed: \(error.localizedDescription)" }
+            print(result)
+            // scripts/check-ios.sh reads this file: simulator console capture can
+            // miss the output of a process that exits immediately.
+            try? Data((result + "\n").utf8).write(to: FileManager.default.temporaryDirectory.appendingPathComponent("self-test-result.txt"))
+            exit(result == "Offline self-tests passed." ? 0 : 1)
         }
     }
     var body: some Scene { WindowGroup { NotesRootView() } }

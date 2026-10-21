@@ -14,6 +14,12 @@ if xcrun simctl list devices booted | grep -q "$DEVICE"; then BOOTED=0; else BOO
 trap 'rm -rf "$CHECK_DIR"; if [ "$BOOTED" = 1 ]; then xcrun simctl shutdown "$DEVICE"; fi' EXIT
 xcrun simctl bootstatus "$DEVICE" -b >/dev/null
 xcrun simctl install "$DEVICE" "$APP"
-OUTPUT=$(xcrun simctl launch --console-pty --terminate-running-process "$DEVICE" local.samsung-cloud-notes --self-test 2>&1)
-echo "$OUTPUT" | grep -q "Offline self-tests passed." || { echo "$OUTPUT"; exit 1; }
+# The app writes its verdict to its own tmp directory; remove any earlier one first.
+RESULT="$(xcrun simctl get_app_container "$DEVICE" local.samsung-cloud-notes data)/tmp/self-test-result.txt"
+rm -f "$RESULT"
+xcrun simctl launch --terminate-running-process "$DEVICE" local.samsung-cloud-notes --self-test >/dev/null
+for _ in $(seq 1 120); do [ -s "$RESULT" ] && break; sleep 1; done
+[ -s "$RESULT" ] || { echo "The self-test produced no result within 120 seconds." >&2; exit 1; }
+cat "$RESULT"
+grep -qx "Offline self-tests passed." "$RESULT"
 echo "iOS offline self-tests passed."

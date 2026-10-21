@@ -1,6 +1,6 @@
 # Validation scope
 
-Release **1.0.0-rc.1**. Development checks: 19–21 October 2026. Counts describe one authorized library, not product limits. Real account fixtures, captures and machine configuration are not distributed.
+Release **1.0.0** (Git tag **v1.0**). Functional checks below were performed on the release-candidate code; stable changes are version metadata and distribution documentation. Development checks: 19–21 October 2026. Counts describe one authorized library, not product limits. Real account fixtures, captures and machine configuration are not distributed.
 
 | Area | Completed development check |
 | --- | --- |
@@ -18,6 +18,10 @@ Release **1.0.0-rc.1**. Development checks: 19–21 October 2026. Counts describ
 | Conflict refusal | Stale-revision test refused without changing the isolated note |
 
 User feedback confirmed folder, drawing, attachment and layout fixes, and native sign-in. Remote capture/Accessibility were unavailable; automated checks are not exhaustive visual/UI validation.
+
+## Stable v1.0 package
+
+The 1.0.0 universal app was built separately from the installed app. Its offline self-tests and recursive signature verification passed; both the main executable and unchanged credential helper contain Apple Silicon and Intel slices. The downloaded ZIP was decoded and checked for version metadata, executable permissions, icon and project/upstream license notices. Packaged executable hashes matched the Mac build. These packaging checks did not repeat browser sign-in or write to the account. The prior release-candidate cloud checks above remain the functional evidence.
 
 ## Windows helper 0.1.3
 

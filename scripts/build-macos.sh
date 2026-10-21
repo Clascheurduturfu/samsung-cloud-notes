@@ -22,7 +22,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundleIdentifier</key><string>local.samsung-cloud-notes</string>
 <key>CFBundleName</key><string>Samsung Cloud Notes</string>
 <key>CFBundleShortVersionString</key><string>VERSION_PLACEHOLDER</string>
-<key>CFBundleVersion</key><string>1.0.0fc1</string>
+<key>CFBundleVersion</key><string>1.0.0</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>

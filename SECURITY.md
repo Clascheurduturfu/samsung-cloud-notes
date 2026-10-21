@@ -2,7 +2,7 @@
 
 ## Reporting
 
-Use **Security → Report a vulnerability** when available. If private reporting is unavailable, open an issue asking for a private contact without vulnerability details or sensitive attachments. Never post live credentials or private notes. The current release candidate is the supported development version; no response time or Samsung support is guaranteed.
+Use **Security → Report a vulnerability** when available. If private reporting is unavailable, open an issue asking for a private contact without vulnerability details or sensitive attachments. Never post live credentials or private notes. The current 1.0 release is the supported version; no response time or Samsung support is guaranteed.
 
 ## Keep private
 

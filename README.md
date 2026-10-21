@@ -2,7 +2,7 @@
 <h1 align="center">Samsung Cloud Notes for macOS</h1>
 <p align="center">Your Samsung notes, on your Mac.<br>Browse, read and edit directly through Samsung Cloud.</p>
 <p align="center">
-<img src="https://img.shields.io/badge/version-1.0.0--rc.1-orange" alt="Version 1.0.0-rc.1">
+<img src="https://img.shields.io/badge/version-1.0.0-orange" alt="Version 1.0.0">
 <img src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple" alt="macOS 13 or newer">
 <img src="https://img.shields.io/badge/SwiftUI-native-F05138?logo=swift&logoColor=white" alt="Native SwiftUI">
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
@@ -31,7 +31,9 @@
 
 ## Get started
 
-This repository contains source for **1.0.0-rc.1**. [Build the app](#build-from-source), then place `Samsung Cloud Notes.app` in Applications. No prebuilt download is published in this repository yet.
+Download the universal Mac app from [**v1.0 Releases**](https://github.com/Clascheurduturfu/samsung-cloud-notes/releases/tag/v1.0), unzip it, and drag `Samsung Cloud Notes.app` to Applications. The release includes SHA-256 checksums. You can also [build from source](#build-from-source).
+
+The app is locally signed, not Developer ID signed or notarized. If macOS blocks the first launch, use **System Settings → Privacy & Security → Open Anyway** after checking that you downloaded this release. Do not disable Gatekeeper globally.
 
 1. Open **Samsung Cloud Notes** and choose **Sign in with Samsung**.
 2. Complete Samsung's own login and verification in the browser. The app never handles your password.
@@ -53,7 +55,7 @@ Samsung's private services require an accepted Android compatibility profile eve
 
 ## Know the limits
 
-- This release candidate handles existing notes. Creating/deleting notes, a full S Pen editor and complete page composition are outside the current UI.
+- Version 1.0 handles existing notes. Creating/deleting notes, a full S Pen editor and complete page composition are outside the current UI.
 - Editing text replaces formatting in that text object. Other original page objects, drawings and attachment references are retained. Locked/encrypted notes and unsupported text encodings are not editable.
 - Drawing previews approximate width and pressure; complex brushes, erasers, rotations and image/background composition may differ or be unsupported.
 - Export creates a `.samsungnote` **folder archive for this client**, not a native Samsung `.sdocx` file.

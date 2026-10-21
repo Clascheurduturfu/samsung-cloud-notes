@@ -1,6 +1,6 @@
 # Samsung Notes interoperability findings
 
-Research dates: 19–21 October 2026. Maintained with release **1.0.0-rc.1**.
+Research dates: 19–21 October 2026. Maintained with release **1.0.0** (Git tag **v1.0**).
 
 These are observations of Samsung's private protocols and particular Windows builds, not a public API specification. The document deliberately contains no live tokens, cookies, passwords, account IDs, notes, machine addresses or signing keys. Public client identifiers and package names below are protocol constants, not credentials.
 
@@ -166,7 +166,7 @@ The response supplies `registrationId`. `POST /identity/v1/tokens` with the same
 
 The tested macOS/desktop profiles returned body-validation errors. The accepted profile is explicitly an Android compatibility profile, with a Mac model/alias. Samsung may categorize this connection as Android. This is not an Android emulator or a dependency on Samsung Notes for Windows.
 
-Release-candidate labels are displayed in the UI, but the SCSP app version uses the numeric portion (for example `1.0.0`); SDK binary strings showed a restricted version grammar. Likewise, Mac bundle short version remains numeric while its build metadata marks the release candidate.
+When a release-candidate label is used, SCSP still uses the numeric portion (for example `1.0.0`); SDK binary strings showed a restricted version grammar. The stable v1.0 release uses `1.0.0` in both app and bundle version metadata.
 
 The first forced renewal after the 0.2.0 → 1.0.0 version change returned HTTP 400, code `40001001`. Re-registering the **same installation/CDID** with the new numeric app version, then requesting a new bearer, resolved it. The app now persists `registeredAppVersion` and re-registers when it differs from the running numeric version. Clearing the old cloud bearer after registration ensures the new registration is actually exercised. Forced renewal/rejected-bearer recovery then passed without changing the account/device cache identity.
 

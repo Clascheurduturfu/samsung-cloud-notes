@@ -79,7 +79,9 @@ enum StyledText {
     static func encode(_ text: String) -> String {
         let count = text.utf16.count
         let header = "<?a 'paragraph/alignment'='0' 'paragraph/parsingState'='False' 'span/fontSize'='1,12' 'span/foregroundColor'='1,-14342875' 'sectionData/sectionData'='\(count)'?>"
-        let tail = "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>"
+        // Every style opened in the header must be closed here: Samsung's rich-text parser rejects a note whose
+        // paragraph style is left open ("Wrong Annotater Type", the phone then cannot open or sync the note).
+        let tail = "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/alignment' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>"
         return Data((header + Data(text.utf8).base64EncodedString() + tail).utf8).base64EncodedString()
     }
 }
@@ -158,16 +160,25 @@ final class CloudDocument {
         if resource.attr("isEncrypted") == "true" || resource.attr("isLocked") == "true" {
             throw NotesError.message("Locked or encrypted notes cannot be edited by this version.")
         }
+        // Repair objects an earlier version of this client left unreadable on Samsung devices (see updateObject).
+        if let object = bodyObject, let tree = resource.first("noteTree")?.first("bodyText"), Int32(object.attr("timeStamp")) == nil, !object.attr("timeStamp").isEmpty {
+            updateObject(object, tree: tree, now: now)
+        }
+        if let object = titleObject, Int32(object.attr("timeStamp")) == nil, !object.attr("timeStamp").isEmpty {
+            object.set("timeStamp", "0"); object.set("modifiedTime", String(Int64(now.timeIntervalSince1970 * 1_000_000))); object.set("hash", hash(object.bytes))
+        }
         if body != newBody {
             guard let object = bodyObject, let text = object.first("text"),
                   let tree = resource.first("noteTree")?.first("bodyText") else {
                 throw NotesError.message("This note has no supported typed-text body. Its drawings are retained in the original document.")
             }
             text.stringValue = StyledText.encode(newBody)
+            Self.dropSpanOrder(object)
             updateObject(object, tree: tree, now: now)
         }
         if title != newTitle {
             guard let object = titleObject else { throw NotesError.message("This note's title cannot be edited yet.") }
+            Self.dropSpanOrder(object)
             if let field = object.first("text") { field.stringValue = StyledText.encode(newTitle) }
             else { object.addChild(XMLElement(name: "text", stringValue: StyledText.encode(newTitle))) }
             object.set("modifiedTime", String(Int64(now.timeIntervalSince1970 * 1_000_000)))
@@ -180,9 +191,19 @@ final class CloudDocument {
         }
         return resource.bytes
     }
+    /// Removes an object's span order data, which describes the styled runs of the text being replaced; the new text is
+    /// one plain run. The whole list goes: Samsung Notes reads at least one entry from any list present, and fails to
+    /// open the note ("Spen SDK can't parse a xml note") when the list is empty.
+    static func dropSpanOrder(_ object: XMLElement) {
+        object.first("spanOrderDataList")?.detach()
+    }
     private func updateObject(_ object: XMLElement, tree: XMLElement, now: Date) {
         let micros = String(Int64(now.timeIntervalSince1970 * 1_000_000))
-        object.set("modifiedTime", micros); object.set("timeStamp", micros)
+        object.set("modifiedTime", micros)
+        // Samsung Notes reads timeStamp as a 32-bit integer (real notes keep 0). Earlier versions of this client wrote a
+        // microsecond time there, which the phone cannot parse ("Spen SDK can't parse a xml note"), so such values are reset.
+        let stamp = object.attr("timeStamp")
+        if !stamp.isEmpty, Int32(stamp) == nil { object.set("timeStamp", "0") }
         let digest = hash(object.bytes)
         object.set("hash", digest); tree.set("h", digest); tree.set("t", micros)
     }

@@ -54,6 +54,18 @@ The object's `text` field is base64-encoded UTF-8. Its decoded contents combine 
 
 The client retains the original XML. When editing a supported text object, it replaces that object's styled text, updates its modification/hash fields and the corresponding tree entry, and preserves the remaining resource.
 
+### Text Samsung devices can open
+
+A cloud readback is not enough: Samsung Notes on a phone parses every downloaded note with its S Pen SDK and silently skips notes it cannot parse (its log shows `fail to createLocalNote` and `Spen SDK can't parse a xml note`). Checked against Samsung Notes 4.4.45 on a Galaxy S23+ with `adb logcat` (tags `SENL$SC/...`):
+
+- Every style opened in a `<?a 'key'='value'?>` marker must be closed by a bare `'key'` before the text ends; an open paragraph style fails with "Wrong Annotater Type".
+- An object's `timeStamp` is parsed as a 32-bit integer; real notes keep `0`.
+- A `spanOrderDataList` must hold at least one `spanOrderData`; an empty list fails to parse. Span order data describes the replaced runs, so the client removes the whole list when it writes plain text.
+- Each `noteTree` entry is matched to its element by id + time + hash: `t` must equal the element's `modifiedTime` and `h` its `hash` (the server rejects mismatches with 422 "can not find in tree/resource").
+- `NoteResource.createdTime` is in microseconds and `syncModifiedTime` in milliseconds.
+
+Versions before this fix wrote notes that the phone could not open; saving such a note again repairs it.
+
 ## Write
 
 - `GET /samsungnotes/v1/notes/{serverId}/info` returns the current revision in an XML attribute.

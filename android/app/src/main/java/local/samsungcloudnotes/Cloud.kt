@@ -73,7 +73,9 @@ object StyledText {
     fun encode(text: String): String {
         val count = text.length // UTF-16 code units, as Samsung counts them
         val header = "<?a 'paragraph/alignment'='0' 'paragraph/parsingState'='False' 'span/fontSize'='1,12' 'span/foregroundColor'='1,-14342875' 'sectionData/sectionData'='$count'?>"
-        val tail = "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>"
+        // Every style opened in the header must be closed here: Samsung's rich-text parser rejects a note whose
+        // paragraph style is left open ("Wrong Annotater Type", the phone then cannot open or sync the note).
+        val tail = "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/alignment' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>"
         return base64((header + base64(text.toByteArray()) + tail).toByteArray())
     }
 }
@@ -165,16 +167,22 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
         textIssue?.let { throw NotesException(it) }
         if (locked) throw NotesException("Locked or encrypted notes cannot be edited by this version.")
         val micros = (nowMillis * 1000).toString()
+        // Repair objects an earlier version of this client left unreadable on Samsung devices (see updateObject).
+        val bodyTree = resource.first("noteTree")?.first("bodyText")
+        bodyObject?.let { obj -> if (bodyTree != null && hasInvalidTimeStamp(obj)) updateObject(obj, bodyTree, micros) }
+        titleObject?.let { obj ->
+            if (hasInvalidTimeStamp(obj)) { obj.set("timeStamp", "0"); obj.set("modifiedTime", micros); obj.set("hash", sha256(obj.bytes).hex()) }
+        }
         if (body != newBody) {
             val obj = bodyObject; val text = obj?.first("text"); val tree = resource.first("noteTree")?.first("bodyText")
             if (obj == null || text == null || tree == null) throw NotesException("This note has no supported typed-text body. Its drawings are retained in the original document.")
             text.stringValue = StyledText.encode(newBody)
-            obj.set("modifiedTime", micros); obj.set("timeStamp", micros)
-            val digest = sha256(obj.bytes).hex()
-            obj.set("hash", digest); tree.set("h", digest); tree.set("t", micros)
+            dropSpanOrder(obj)
+            updateObject(obj, tree, micros)
         }
         if (title != newTitle) {
             val obj = titleObject ?: throw NotesException("This note's title cannot be edited yet.")
+            dropSpanOrder(obj)
             val field = obj.first("text")
             if (field != null) field.stringValue = StyledText.encode(newTitle) else obj.addChild(XmlElement("text", StyledText.encode(newTitle)))
             obj.set("modifiedTime", micros)
@@ -186,6 +194,26 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
         }
         return resource.bytes
     }
+
+    /**
+     * Removes an object's span order data, which describes the styled runs of the text being replaced; the new text is
+     * one plain run. The whole list goes: Samsung Notes reads at least one entry from any list present, and fails to
+     * open the note ("Spen SDK can't parse a xml note") when the list is empty.
+     */
+    private fun dropSpanOrder(obj: XmlElement) {
+        obj.first("spanOrderDataList")?.detach()
+    }
+
+    private fun updateObject(obj: XmlElement, tree: XmlElement, micros: String) {
+        obj.set("modifiedTime", micros)
+        // Samsung Notes reads timeStamp as a 32-bit integer (real notes keep 0). Earlier versions of this client wrote a
+        // microsecond time there, which the phone cannot parse ("Spen SDK can't parse a xml note"), so such values are reset.
+        if (hasInvalidTimeStamp(obj)) obj.set("timeStamp", "0")
+        val digest = sha256(obj.bytes).hex()
+        obj.set("hash", digest); tree.set("h", digest); tree.set("t", micros)
+    }
+
+    private fun hasInvalidTimeStamp(obj: XmlElement): Boolean = obj.attr("timeStamp").let { it.isNotEmpty() && it.toIntOrNull() == null }
 }
 
 class CloudClient(account: AccountSession, private val renew: suspend (AccountSession, Boolean) -> AccountSession) {

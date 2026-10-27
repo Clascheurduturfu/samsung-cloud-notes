@@ -16,6 +16,16 @@ enum SelfTest {
         catch let error as NotesError { if error.localizedDescription == "Malformed callback was accepted." { throw error } }
         let cases = ["", "hello", "café — 日本語 🚀", "first\nsecond\n", "<&> \"quotes\""]
         for value in cases { guard try StyledText.decode(StyledText.encode(value)) == value else { throw NotesError.message("Text round-trip mismatch.") } }
+        // Samsung's parser rejects text that leaves a style open, so every 'key'='value' must be followed by a bare 'key'.
+        let encoded = String(decoding: Data(base64Encoded: StyledText.encode("balanced"))!, as: UTF8.self)
+        var open: [String: Int] = [:]
+        for marker in StyledText.marker.matches(in: encoded, range: NSRange(encoded.startIndex..., in: encoded)).compactMap({ Range($0.range, in: encoded).map { String(encoded[$0]) } }) {
+            for token in marker.dropFirst(4).dropLast(2).split(separator: " ") {
+                let key = String(token.split(separator: "=", maxSplits: 1)[0])
+                open[key, default: 0] += token.contains("=") ? 1 : -1
+            }
+        }
+        guard open.values.allSatisfy({ $0 == 0 }) else { throw NotesError.message("Encoded text leaves a style open.") }
         guard decodedCloudName(Data("Math notes\u{200b}".utf8).base64EncodedString()) == "Math notes", decodedCloudName(Data("Math notes 📒".utf8).base64EncodedString()) == "Math notes 📒", decodedCloudName("My notes") == "My notes" else { throw NotesError.message("Folder name decoding failed.") }
         let inkFixture = Data(base64Encoded: "/////wQAAACgDwAADQAAAAAADQAAAAEIAEoAAAABAEIAAAABAAEMAgAAAAAAAAAkQAAAAAAAADRAAAAAAAAAPkAAAAAAAABEQAAAAD8AAEA/AAAAAAoAAAACAFY0Ev8AAEBA")!
         let ink = try InkStroke(inkFixture)
@@ -76,6 +86,14 @@ enum SelfTest {
         record.locked = false
         guard reopened.document(record) == nil else { throw NotesError.message("Removed note was retained in cache.") }
         let updated = try XMLDocument(data: fixture.uploadXML(title: "Test title", body: "After 日本語 🚀"))
+        // Saves must stay readable on Samsung devices: timeStamp fits an Int32 and stale span data is gone, even when an
+        // earlier version of this client left a microsecond timeStamp behind.
+        let damaged = try CloudDocument(serverID: "damaged", data: Data(("<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree>"
+            + "<attributes><title><object timeStamp=\"1793068308238575\"><text>\(StyledText.encode("Title"))</text></object></title></attributes><bodyText id=\"body\"><object hash=\"old\" timeStamp=\"1793068308238575\">"
+            + "<spanOrderDataList><spanOrderData val=\"x\"/></spanOrderDataList><text>\(StyledText.encode("Old"))</text></object></bodyText></noteResource><commitId>c</commitId></CompareNoteView>").utf8))
+        let repaired = try XMLDocument(data: damaged.uploadXML(title: "Title", body: "New"), options: [.nodeLoadExternalEntitiesNever]).rootElement()
+        guard repaired?.first("bodyText")?.first("object")?.attr("timeStamp") == "0", repaired?.first("attributes")?.first("title")?.first("object")?.attr("timeStamp") == "0",
+              repaired?.first("bodyText")?.first("object")?.first("spanOrderDataList") == nil else { throw NotesError.message("A save left the note unreadable on Samsung devices.") }
         guard updated.rootElement()?.attr("unknownField") == "retain",
               try updated.nodes(forXPath: "/noteResource/pageList/page/opaqueDrawing[@value='preserve']").count == 1,
               try updated.nodes(forXPath: "/noteResource/contentFileList/contentFile[@hash='original']").count == 1 else { throw NotesError.message("Opaque drawing or attachment metadata was lost.") }

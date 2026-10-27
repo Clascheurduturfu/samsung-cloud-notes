@@ -42,6 +42,12 @@ class OfflineTest {
         for (value in listOf("", "hello", "café — 日本語 🚀", "first\nsecond\n", "<&> \"quotes\"")) assertEquals(value, StyledText.decode(StyledText.encode(value)))
         val mixed = "<?a 'span/bold'='1,True'?>" + base64("one".toByteArray()) + "<?a 'span/bold'?>" + base64("\ntwo".toByteArray())
         assertEquals("one\ntwo", StyledText.decode(base64(mixed.toByteArray())))
+        // Samsung's parser rejects text that leaves a style open, so every 'key'='value' must be followed by a bare 'key'.
+        val open = mutableMapOf<String, Int>()
+        for (marker in Regex("<\\?a (.*?)\\?>").findAll(String(base64Decode(StyledText.encode("balanced"))!!))) {
+            for (token in marker.groupValues[1].split(" ")) open.merge(token.substringBefore("="), if ("=" in token) 1 else -1, Int::plus)
+        }
+        assertTrue("Encoded text leaves a style open: $open", open.values.all { it == 0 })
     }
 
     @Test fun folderNames() {
@@ -87,6 +93,19 @@ class OfflineTest {
         assertEquals("After 日本語 🚀", StyledText.decode(resource.first("bodyText")!!.first("object")!!.value("text")))
         assertEquals("Test title", StyledText.decode(resource.first("attributes")!!.first("title")!!.first("object")!!.value("text")))
         assertEquals(resource.first("bodyText")!!.first("object")!!.attr("hash"), resource.first("noteTree")!!.first("bodyText")!!.attr("h"))
+    }
+
+    @Test fun savesStayReadableOnSamsungDevices() {
+        // timeStamp fits an Int32 and stale span data is gone, even when an earlier version of this client left a
+        // microsecond timeStamp behind.
+        val damaged = CloudDocument("damaged", ("<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree>" +
+            "<attributes><title><object timeStamp=\"1793068308238575\"><text>${StyledText.encode("Title")}</text></object></title></attributes><bodyText id=\"body\"><object hash=\"old\" timeStamp=\"1793068308238575\">" +
+            "<spanOrderDataList><spanOrderData val=\"x\"/></spanOrderDataList><text>${StyledText.encode("Old")}</text></object></bodyText></noteResource><commitId>c</commitId></CompareNoteView>").toByteArray())
+        val repaired = XmlDocument(damaged.uploadXml("Title", "New")).rootElement()!!
+        assertEquals("0", repaired.first("bodyText")!!.first("object")!!.attr("timeStamp"))
+        assertEquals("0", repaired.first("attributes")!!.first("title")!!.first("object")!!.attr("timeStamp"))
+        assertNull(repaired.first("bodyText")!!.first("object")!!.first("spanOrderDataList"))
+        assertEquals("New", StyledText.decode(repaired.first("bodyText")!!.first("object")!!.value("text")))
     }
 
     @Test fun cacheIsRevisionAndSessionScoped() {

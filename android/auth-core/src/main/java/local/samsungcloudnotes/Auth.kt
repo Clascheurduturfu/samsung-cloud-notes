@@ -1,5 +1,6 @@
 package local.samsungcloudnotes
 
+import local.samsungcloudnotes.authcore.BuildConfig
 import android.os.Build
 import java.net.URI
 import java.net.URL

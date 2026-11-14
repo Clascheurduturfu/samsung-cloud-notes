@@ -62,6 +62,8 @@ extension NotesModel {
 
 struct NotesView: View {
     @StateObject var model = NotesModel()
+    @ObservedObject var updates = NotesAppUpdates.shared
+    @State var showingUpdates = false
     @State var importing = false
     @State var showDrawing = false
     var body: some View {
@@ -89,7 +91,10 @@ struct NotesView: View {
                         .disabled(model.busy).help("Account options for " + model.account)
                         .accessibilityLabel("Account: " + model.account)
                     }
-                    Text("Version \(appVersion)").foregroundStyle(.secondary)
+                    Button { showingUpdates.toggle() } label: {
+                        Text("Version \(appVersion)").foregroundStyle(.secondary)
+                    }.buttonStyle(.plain).help("Update settings and release channels")
+                        .popover(isPresented:$showingUpdates) { NotesUpdatesView(updates:updates,model:model) }
                 }.font(.caption).frame(maxWidth: .infinity, alignment: .leading).padding(12)
             }
             .navigationSplitViewColumnWidth(min: 185, ideal: 210)
@@ -132,10 +137,20 @@ struct NotesView: View {
                         }.padding(10) }
                     }
                     if let issue = document.textIssue { Text(issue).font(.caption).foregroundStyle(.secondary).padding(10) }
-                    if model.draftConflict { Text("This local draft is based on an older cloud revision. Reload the note to archive the draft and open the current cloud copy.").font(.caption).foregroundStyle(.orange).padding(10) }
+                    if model.draftConflict {
+                        HStack(spacing:12) {
+                            Text("These local edits are from an older cloud copy. Discard them to use the downloaded note.").foregroundStyle(.orange)
+                            Spacer(minLength:0)
+                            Button("Discard local changes") { model.discardLocalChanges() }.disabled(model.busy)
+                                .help("Keep a recovery copy, clear this Mac's draft, and show the downloaded note. Works offline.")
+                        }.font(.caption).padding(10)
+                    }
                     Divider()
                     HStack {
                         Text(model.dirty ? "Local draft" : "Cloud copy").foregroundStyle(model.dirty ? .orange : .secondary)
+                        if model.dirty && !model.draftConflict {
+                            Button("Discard local changes") { model.discardLocalChanges() }.buttonStyle(.link).disabled(model.busy)
+                        }
                         Spacer()
                         Text("Plain text editing · drawings and attachments retained").foregroundStyle(.secondary)
                     }.font(.caption).padding(10)
@@ -154,7 +169,8 @@ struct NotesView: View {
         }
         .toolbar {
             Button { Task { await model.refresh() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }.disabled(model.busy || model.account.isEmpty)
-            Button { Task { if let id = model.selection { model.preserveDraft(); await model.open(id, force: true) } } } label: { Label("Reload note", systemImage: "arrow.down.doc") }.disabled(model.busy || model.document == nil)
+            Button { Task { await model.reloadFromCloud() } } label: { Label("Reload cloud copy", systemImage: "arrow.down.doc") }.disabled(model.busy || model.document == nil)
+                .help("Download the latest cloud copy and archive local edits. To clear edits while offline, use Discard local changes.")
             Button { Task { await model.export() } } label: { Label("Export", systemImage: "square.and.arrow.up") }.disabled(model.busy || model.document == nil)
             Button { do { _ = try LocalStore.directory("Backups"); NSWorkspace.shared.open(LocalStore.root) } catch { model.error = error.localizedDescription } } label: { Label("Local copies", systemImage: "folder") }
             Button { Task { await model.save() } } label: { Label("Save to cloud", systemImage: "icloud.and.arrow.up") }.disabled(model.busy || !model.dirty || !model.editable).keyboardShortcut("s")
@@ -198,6 +214,17 @@ struct NotesView: View {
 
 @main struct SamsungCloudNotesApp: App {
     init() {
+        if CommandLine.arguments.contains("--updater-state-test") {
+            Task { @MainActor in
+                do { try await NotesUpdateSelfTest.runState(); try await DraftSelfTest.run(); exit(0) }
+                catch { fputs("Updater state test failed: \(error.localizedDescription)\n",stderr); exit(1) }
+            }
+            RunLoop.main.run()
+        }
+        if CommandLine.arguments.contains("--update-probe") {
+            do { try SelfTest.run(); NotesUpdateReadiness.acknowledge(); sleep(3); exit(0) }
+            catch { exit(1) }
+        }
         if CommandLine.arguments.dropFirst().first == "--cli" { CommandLineTool.run(Array(CommandLine.arguments.dropFirst(2))) }
         if CommandLine.arguments.contains("--session-stdin") {
             do { transientSession = try JSONDecoder().decode(AccountSession.self, from: FileHandle.standardInput.readDataToEndOfFile()) }
@@ -208,7 +235,7 @@ struct NotesView: View {
             catch { fputs("Session import failed: \(error.localizedDescription)\n", stderr); exit(1) }
         }
         if CommandLine.arguments.contains("--self-test") {
-            do { try SelfTest.run(); print("Offline self-tests passed."); exit(0) }
+            do { try SelfTest.run(); try NotesUpdateSelfTest.run(); print("Offline self-tests passed."); exit(0) }
             catch { fputs("Self-test failed: \(error.localizedDescription)\n", stderr); exit(1) }
         }
         if CommandLine.arguments.contains("--verify-signout") {
@@ -341,7 +368,7 @@ struct NotesView: View {
         }
     }
     var body: some Scene {
-        WindowGroup { NotesView() }.defaultSize(width: 1150, height: 760)
+        WindowGroup { NotesView().onAppear { NotesUpdateReadiness.acknowledge(); NotesAppUpdates.shared.checkAtLaunch() } }.defaultSize(width: 1150, height: 760)
             .commands {
                 CommandGroup(after: .appSettings) {
                     Button("Install Command Line Tool…") { CommandLineTool.installFromApp() }

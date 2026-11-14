@@ -15,7 +15,37 @@ enum SelfTest {
         do { _ = try SamsungAuthCrypto.callback("not-hex", key: "test"); throw NotesError.message("Malformed callback was accepted.") }
         catch let error as NotesError { if error.localizedDescription == "Malformed callback was accepted." { throw error } }
         let cases = ["", "hello", "café — 日本語 🚀", "first\nsecond\n", "<&> \"quotes\""]
-        for value in cases { guard try StyledText.decode(StyledText.encode(value)) == value else { throw NotesError.message("Text round-trip mismatch.") } }
+        for value in cases {
+            guard try StyledText.decode(StyledText.encode(value)) == value,
+                  try StyledText.decode(StyledText.encodeTitle(value)) == value.replacingOccurrences(of: "\r\n", with: "\n") else {
+                throw NotesError.message("Text round-trip mismatch.")
+            }
+        }
+        guard StyledText.encode("") == "", StyledText.encodeTitle("") == "" else {
+            throw NotesError.message("Empty styled text was not empty.")
+        }
+        if let multiData = Data(base64Encoded: StyledText.encode("first\nsecond")),
+           let multiDecoded = String(data: multiData, encoding: .utf8) {
+            func occurrences(_ needle: String, in haystack: String) -> Int {
+                haystack.components(separatedBy: needle).count - 1
+            }
+            guard multiDecoded.contains("'span/fontSize'='1,15.0'"),
+                  multiDecoded.contains("'span/foregroundColor'='1,-14342875'"),
+                  occurrences("'paragraph/alignment'='0'", in: multiDecoded) == 2,
+                  occurrences("'paragraph/alignment' ", in: multiDecoded) == 2,
+                  occurrences("'paragraph/parsingState'='false'", in: multiDecoded) == 2,
+                  occurrences("'paragraph/parsingState' ", in: multiDecoded) == 2 else {
+                throw NotesError.message("Styled body paragraph/span annotations mismatch.")
+            }
+        } else { throw NotesError.message("Encoded styled body was not base64 UTF-8.") }
+        if let titleData = Data(base64Encoded: StyledText.encodeTitle("Title")),
+           let titleDecoded = String(data: titleData, encoding: .utf8) {
+            guard titleDecoded.contains("'paragraph/parsingState'='false'"),
+                  !titleDecoded.contains("span/fontSize"),
+                  !titleDecoded.contains("sectionData/sectionData") else {
+                throw NotesError.message("Styled title included unsupported span or section tags.")
+            }
+        } else { throw NotesError.message("Encoded styled title was not base64 UTF-8.") }
         guard decodedCloudName(Data("Math notes\u{200b}".utf8).base64EncodedString()) == "Math notes", decodedCloudName(Data("Math notes 📒".utf8).base64EncodedString()) == "Math notes 📒", decodedCloudName("My notes") == "My notes" else { throw NotesError.message("Folder name decoding failed.") }
         let inkFixture = Data(base64Encoded: "/////wQAAACgDwAADQAAAAAADQAAAAEIAEoAAAABAEIAAAABAAEMAgAAAAAAAAAkQAAAAAAAADRAAAAAAAAAPkAAAAAAAABEQAAAAD8AAEA/AAAAAAoAAAACAFY0Ev8AAEBA")!
         let ink = try InkStroke(inkFixture)
@@ -31,7 +61,7 @@ enum SelfTest {
         let fixturePlain = try AES.GCM.open(AES.GCM.SealedBox(combined: fixtureSealed), using: SymmetricKey(data: fixtureKey))
         let session = try JSONDecoder().decode(AccountSession.self, from: fixturePlain)
         guard session.account == "Fixture", session.authorization == "Bearer synthetic-connection-fixture" else { throw NotesError.message("Windows connection decryption mismatch.") }
-        let fixtureXML = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\" unknownField=\"retain\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><attributes><title><object/></title></attributes><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\"><text>\(StyledText.encode("Before"))</text></object></bodyText><pageList><page id=\"page\"><opaqueDrawing value=\"preserve\"/></page></pageList><contentFileList><contentFile id=\"asset\" hash=\"original\"/></contentFileList></noteResource><commitId>fixture-revision</commitId><downloadUrls/></CompareNoteView>"
+        let fixtureXML = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\" unknownField=\"retain\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><attributes><title><object/></title></attributes><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\"><spanOrderDataList><spanOrderData val=\"stale\"/></spanOrderDataList><zeroLengthSpanList><zeroLengthSpan val=\"stale-zero\"/></zeroLengthSpanList><text>\(StyledText.encode("Before"))</text></object></bodyText><pageList><page id=\"page\"><opaqueDrawing value=\"preserve\"/></page></pageList><contentFileList><contentFile id=\"asset\" hash=\"original\"/></contentFileList></noteResource><commitId>fixture-revision</commitId><downloadUrls/></CompareNoteView>"
         // The portable DOM must round-trip the fixture exactly as the shared code sees it.
         let portable = try PortableXMLDocument(data: Data(fixtureXML.utf8), options: [.nodePreserveAll, .nodeLoadExternalEntitiesNever])
         guard try PortableXMLDocument(data: Data(portable.xmlString.utf8)).xmlString == portable.xmlString,
@@ -75,9 +105,55 @@ enum SelfTest {
         try reopened.prune([])
         record.locked = false
         guard reopened.document(record) == nil else { throw NotesError.message("Removed note was retained in cache.") }
-        let updated = try XMLDocument(data: fixture.uploadXML(title: "Test title", body: "After 日本語 🚀"))
+        let newBody = "After 日本語 🚀"
+        let updated = try XMLDocument(data: fixture.uploadXML(title: "Test title", body: newBody))
+        let updatedBodyObj = updated.rootElement()?.first("bodyText")?.first("object")
+        let updatedOrders = updatedBodyObj?.first("spanOrderDataList")?.elements(forName: "spanOrderData").map {
+            Data(base64Encoded: $0.attr("val")).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        } ?? []
+        let updatedZeros = updatedBodyObj?.first("zeroLengthSpanList")?.elements(forName: "zeroLengthSpan") ?? []
         guard updated.rootElement()?.attr("unknownField") == "retain",
+              updated.rootElement()?.first("attributes")?.attr("editTime") == "0",
+              updatedBodyObj?.attr("timeStamp") == "0",
+              updatedOrders == ["3,0,\(newBody.utf16.count),1,15.0", "1,0,\(newBody.utf16.count),1,-14342875"],
+              updatedZeros.isEmpty,
+              updated.rootElement()?.first("attributes")?.first("title")?.first("object")?.value("text") == StyledText.encodeTitle("Test title"),
               try updated.nodes(forXPath: "/noteResource/pageList/page/opaqueDrawing[@value='preserve']").count == 1,
-              try updated.nodes(forXPath: "/noteResource/contentFileList/contentFile[@hash='original']").count == 1 else { throw NotesError.message("Opaque drawing or attachment metadata was lost.") }
+              try updated.nodes(forXPath: "/noteResource/contentFileList/contentFile[@hash='original']").count == 1 else {
+            throw NotesError.message("Updated XML span order, title, drawing, or attachment metadata failed verification.")
+        }
+        let legacyBodyPayload = Data(("<?a 'paragraph/alignment'='0' 'paragraph/parsingState'='False' 'span/fontSize'='1,12' 'span/foregroundColor'='1,-14342875' 'sectionData/sectionData'='6'?>" + Data("Legacy".utf8).base64EncodedString() + "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>").utf8).base64EncodedString()
+        let legacyXML = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><attributes editTime=\"1794667044333760\"><title><object><text>\(legacyBodyPayload)</text></object></title></attributes><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\" timeStamp=\"1794667044333760\"><spanOrderDataList><spanOrderData val=\"stale\"/></spanOrderDataList><text>\(legacyBodyPayload)</text></object></bodyText></noteResource><commitId>legacy-rev</commitId></CompareNoteView>"
+        let legacyDoc = try CloudDocument(serverID: "legacy", data: Data(legacyXML.utf8))
+        guard legacyDoc.needsNativeRepair else { throw NotesError.message("Legacy Mac XML was not flagged for native repair.") }
+        let fixedResourceXML = try legacyDoc.uploadXML(title: legacyDoc.title, body: legacyDoc.body)
+        let wrappedFixed = "<CompareNoteView>" + String(decoding: fixedResourceXML, as: UTF8.self) + "<commitId>fixed-rev</commitId></CompareNoteView>"
+        let fixedDoc = try CloudDocument(serverID: "legacy", data: Data(wrappedFixed.utf8))
+        guard !fixedDoc.needsNativeRepair,
+              fixedDoc.body == "Legacy", fixedDoc.title == "Legacy",
+              fixedDoc.bodyObject?.attr("timeStamp") == "0",
+              fixedDoc.resource.first("attributes")?.attr("editTime") == "0" else {
+            throw NotesError.message("Legacy Mac XML repair failed.")
+        }
+        let syncFixture = try CloudDocument(serverID: "sync-fixture", data: Data(fixtureXML.utf8))
+        syncFixture.resource.set("syncModifiedTime", "1800000000000")
+        let saved = try XMLDocument(data: syncFixture.uploadXML(title: "Phone sync", body: "New body", now: Date(timeIntervalSince1970: 1_700_000_000))).rootElement()!
+        guard saved.attr("syncModifiedTime") == "1800000000001",
+              saved.first("attributes")?.attr("displayModifiedTime") == "1800000000001",
+              saved.first("attributes")?.attr("modifiedTime") == "1800000000001000",
+              saved.first("bodyText")?.first("object")?.attr("modifiedTime") == "1800000000001000",
+              saved.first("noteTree")?.first("bodyText")?.attr("t") == "1800000000001000" else {
+            throw NotesError.message("Phone sync timestamp failed to advance consistently across a backwards clock.")
+        }
+        let repaired = try XMLDocument(data: syncFixture.uploadXML(title: "Phone sync", body: "New body", now: Date(timeIntervalSince1970: 1_700_000_000))).rootElement()!
+        guard repaired.attr("syncModifiedTime") == "1800000000002" else { throw NotesError.message("Repeated saves reused the phone sync timestamp.") }
+        let deltaFixture = try CloudDocument(serverID:"delta-fixture",data:Data(fixtureXML.utf8))
+        let delta = try XMLDocument(data:deltaFixture.uploadTextDelta(title:"Changed",body:"New text")).rootElement()!
+        guard delta.first("pageList") == nil, delta.first("contentFileList") == nil,
+              delta.first("noteTree") != nil,
+              try StyledText.decode(delta.first("bodyText")?.first("object")?.value("text") ?? "") == "New text",
+              deltaFixture.resource.first("pageList")?.first("page")?.first("opaqueDrawing")?.attr("value") == "preserve" else {
+            throw NotesError.message("Text delta declared unchanged binary uploads or lost the original drawing data.")
+        }
     }
 }

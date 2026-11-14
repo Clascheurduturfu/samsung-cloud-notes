@@ -258,6 +258,9 @@ private fun Editor(model: NotesViewModel, openFile: (File, String) -> Unit, show
                     IconButton(onClick = { menu = true }, enabled = !model.busy && document != null) { Icon(Icons.Default.MoreVert, "More") }
                     DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
                         DropdownMenuItem(text = { Text("Reload cloud copy") }, onClick = { menu = false; model.reload() })
+                        if (model.dirty || model.draftConflict) {
+                            DropdownMenuItem(text = { Text("Discard local changes") }, onClick = { menu = false; model.discardLocalChanges() })
+                        }
                         if (document?.drawingPages?.isNotEmpty() == true) DropdownMenuItem(text = { Text("Drawing PDF") }, onClick = {
                             menu = false; scope.launch { model.drawingFile()?.let { openFile(it, "application/pdf") } }
                         })

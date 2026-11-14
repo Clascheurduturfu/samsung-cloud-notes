@@ -11,3 +11,6 @@ for source in credential-store import-signing-identity sign-app make-icon; do
   xcrun swiftc -swift-version 5 "scripts/$source.swift" -o "$CHECK_DIR/$source"
 done
 "$CHECK_DIR/SamsungCloudNotes-$(uname -m)" --self-test
+"$CHECK_DIR/SamsungCloudNotes-$(uname -m)" --updater-state-test
+xcrun swiftc -swift-version 5 -parse-as-library -DUPDATE_INSTALLER -O Sources/macOS/UpdateRelease.swift scripts/update-installer.swift -o "$CHECK_DIR/UpdateInstaller"
+"$CHECK_DIR/UpdateInstaller" --self-test

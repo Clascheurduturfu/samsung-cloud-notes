@@ -27,6 +27,8 @@ import Combine
     private var loaded: [String: CloudDocument] = [:]
     private var generation = 0
     private var draftTask: Task<Void, Never>?
+    private let drafts: NoteDraftStore
+    init(drafts: NoteDraftStore = NoteDraftStore()) { self.drafts = drafts }
     /// Opens the newest note after loading. Compact layouts navigate on selection, so they opt out.
     var autoSelectFirst = true
     var dirty: Bool { document.map { $0.title != title || $0.body != body } ?? false }
@@ -175,38 +177,75 @@ import Combine
         generation += 1; let taskGeneration = generation
         do {
             let doc: CloudDocument
-            if !force, let cached = loaded[id] { doc = cached }
+            let downloaded: Bool
+            if !force, let cached = loaded[id] { doc = cached; downloaded = false }
             else {
-                doc = try await client.download(id); loaded[id] = doc
-                if let record = notes.first(where: { $0.id == id }) { try cache?.save(doc, revision: record.commit) }
+                doc = try await client.download(id); downloaded = true
             }
             guard generation == taskGeneration, selection == id else { return }
-            document = doc; title = doc.title; body = doc.body; draftConflict = false
-            if force {
-                try LocalStore.archiveDraft(id: id)
-                try LocalStore.writeDraft(id: id, title: doc.title, body: doc.body, commit: doc.commit)
-            }
-            if !force, let draftURL = try? LocalStore.directory("Drafts").appendingPathComponent(id + ".json"),
-               let draft = try? Data(contentsOf: draftURL),
-               let values = try? JSONSerialization.jsonObject(with: draft) as? [String: String],
-               let draftTitle = values["title"], let draftBody = values["body"], (draftBody != doc.body || draftTitle != doc.title) {
-                title = draftTitle; body = draftBody
-                draftConflict = values["commit"] != doc.commit
-                status = draftConflict ? "Draft is based on an older revision. Reload to archive it and use the cloud copy." : "Recovered an unsaved local draft. Save when ready."
-            }
+            try present(doc,restoringDraft:!force,persistDownloadedCopy:downloaded)
         } catch {
             guard generation == taskGeneration, selection == id else { return }
             self.error = error.localizedDescription
+            if force { status = "Could not reload the cloud copy. Discard local changes to clear the draft without a connection." }
         }
+    }
+    func present(_ doc: CloudDocument, restoringDraft: Bool = true, persistDownloadedCopy: Bool = false) throws {
+        let id = doc.serverID
+        if !restoringDraft { try drafts.discard(id) }
+        draftTask?.cancel(); draftTask = nil
+        loaded[id] = doc
+        if let index = notes.firstIndex(where:{ $0.id == id }) { notes[index].commit = doc.commit; describe(index,document:doc) }
+        if persistDownloadedCopy {
+            try cache?.save(doc,revision:doc.commit)
+            try cache?.saveIndex(CloudIndex(notes:notes,folders:folders))
+        }
+        document = doc; title = doc.title; body = doc.body; draftConflict = false
+        if restoringDraft, let draft = try? drafts.read(id), draft.title != doc.title || draft.body != doc.body {
+            title = draft.title; body = draft.body; draftConflict = draft.commit != doc.commit
+            status = draftConflict ? "This Mac has unsaved edits from an older cloud copy. Discard local changes to use the downloaded note." : "Recovered unsaved local edits. Save when ready."
+        } else {
+            // Older clients wrote saved cloud baselines into Drafts. Remove a
+            // matching baseline before a later cloud edit turns it into a false conflict.
+            if restoringDraft, let clean = try? drafts.read(id), clean.title == doc.title, clean.body == doc.body {
+                try drafts.removeIfMatches(id,draft:clean)
+            }
+            if !restoringDraft { status = "Cloud copy loaded. Previous local edits are archived in Local copies." }
+        }
+    }
+    func reloadFromCloud() async {
+        guard !busy, let id = selection else { return }
+        preserveDraft(); draftTask?.cancel(); draftTask = nil
+        busy = true; status = "Downloading the cloud copy…"
+        defer { busy = false }
+        await open(id,force:true)
+    }
+    func discardLocalChanges() {
+        guard !busy, let document else { return }
+        draftTask?.cancel(); draftTask = nil; generation += 1
+        do {
+            let current = dirty ? NoteDraft(title:title,body:body,commit:document.commit) : nil
+            try drafts.discard(document.serverID,current:current)
+            let baseline = loaded[document.serverID] ?? document
+            self.document = baseline; title = baseline.title; body = baseline.body
+            draftConflict = false; error = nil
+            status = "Local changes discarded. Showing the downloaded cloud copy; Refresh checks for newer changes. Recovery copy: Local copies → DraftHistory."
+        } catch { self.error = "Could not archive your edits; the local draft was kept. " + error.localizedDescription }
     }
     func preserveDraft() {
         guard let document, dirty, !draftConflict else { return }
-        do { try LocalStore.writeDraft(id: document.serverID, title: title, body: body, commit: document.commit) }
+        do { try drafts.write(NoteDraft(title:title,body:body,commit:document.commit),id:document.serverID) }
         catch { self.error = "Could not save your local draft: " + error.localizedDescription }
     }
     func scheduleDraft() {
         draftTask?.cancel()
-        draftTask = Task { try? await Task.sleep(nanoseconds: 600_000_000); if !Task.isCancelled { preserveDraft() } }
+        guard let document, dirty, !draftConflict else { draftTask = nil; return }
+        let id = document.serverID, revision = document.commit, ticket = generation
+        draftTask = Task {
+            try? await Task.sleep(nanoseconds:600_000_000)
+            guard !Task.isCancelled, generation == ticket, self.document?.serverID == id, self.document?.commit == revision else { return }
+            preserveDraft()
+        }
     }
     func save() async {
         guard let client, let document, !busy, dirty, !draftConflict else { return }
@@ -222,10 +261,10 @@ import Combine
                 notes[i].commit = fresh.commit
                 try cache?.save(fresh, revision: fresh.commit)
             }
-            try LocalStore.writeDraft(id: id, title: savedTitle, body: savedBody, commit: fresh.commit)
             if selection == id { self.document = fresh; title = fresh.title; body = fresh.body }
             if let i = notes.firstIndex(where: { $0.id == id }) { describe(i, document: fresh) }
             try cache?.saveIndex(CloudIndex(notes: notes, folders: folders))
+            try drafts.removeIfMatches(id,draft:NoteDraft(title:savedTitle,body:savedBody,commit:document.commit))
             status = "Saved to Samsung Cloud · \(Date().formatted(date: .omitted, time: .shortened))"
         } catch { self.error = error.localizedDescription; status = "Save failed. Your local draft is retained." }
     }

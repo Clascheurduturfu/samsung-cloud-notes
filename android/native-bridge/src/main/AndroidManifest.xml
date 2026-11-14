@@ -1,0 +1,29 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <activity android:name="local.samsungcloudnotes.nativebridge.ImportNoteActivity"
+            android:exported="false" android:label="Import Samsung Notes file"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar" />
+        <activity android:name="local.samsungcloudnotes.nativebridge.SaveExportActivity"
+            android:exported="true" android:label="Save to Files"
+            android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="application/sdoc" />
+            </intent-filter>
+        </activity>
+        <provider android:name="local.samsungcloudnotes.nativebridge.BridgeProvider"
+            android:authorities="com.samsung.android.app.notes.cloudbeta.init"
+            android:exported="false" android:initOrder="100" />
+        <activity android:name="local.samsungcloudnotes.nativebridge.AccountActivity"
+            android:exported="true" android:launchMode="singleTask"
+            android:label="Samsung Cloud" android:theme="@android:style/Theme.Material.Light.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="ms-app" android:host="s-1-15-2-4027708247-2189610-1983755848-2937435718-1578786913-2158692839-1974417358" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

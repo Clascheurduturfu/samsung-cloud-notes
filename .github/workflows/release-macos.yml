@@ -1,0 +1,102 @@
+name: Publish Mac release
+on:
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: Release channel (requires matching main or preview branch)
+        required: true
+        type: choice
+        options: [preview, stable]
+permissions:
+  contents: read
+concurrency:
+  group: samsung-cloud-notes-macos-release-${{ inputs.channel }}
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate channel and source branch
+        env:
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          if [ "$CHANNEL" = stable ]; then test "$GITHUB_REF_NAME" = main; else test "$GITHUB_REF_NAME" = preview; fi
+          python3 - "$CHANNEL" <<'PY'
+          import pathlib,re,sys
+          version=re.search(r'^let appVersion = "([^"]+)"',pathlib.Path('Sources/Shared/Cloud.swift').read_text(),re.M)[1]
+          assert bool(re.fullmatch(r'\d+\.\d+\.\d+(?:-(alpha|beta|rc)\.\d+)?',version))
+          assert ('-' in version)==(sys.argv[1]=='preview'), 'Version/channel mismatch'
+          PY
+      - name: Prepare the existing publisher identity
+        env:
+          NOTES_SIGNING_P12_BASE64: ${{ secrets.NOTES_SIGNING_P12_BASE64 }}
+          NOTES_SIGNING_PASSWORD: ${{ secrets.NOTES_SIGNING_PASSWORD }}
+          NOTES_SIGNING_IDENTITY: ${{ secrets.NOTES_SIGNING_IDENTITY }}
+        run: |
+          test -n "$NOTES_SIGNING_P12_BASE64"
+          test -n "$NOTES_SIGNING_IDENTITY"
+          python3 - <<'PY'
+          import base64,os,pathlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'scnotes-release.p12'
+          p.write_bytes(base64.b64decode(os.environ['NOTES_SIGNING_P12_BASE64'],validate=True));p.chmod(0o600)
+          PY
+          NOTES_KEYCHAIN_PASSWORD=$(python3 -c 'import secrets;print(secrets.token_urlsafe(32))')
+          security create-keychain -p "$NOTES_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/scnotes-release.keychain-db"
+          security unlock-keychain -p "$NOTES_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/scnotes-release.keychain-db"
+          security import "$RUNNER_TEMP/scnotes-release.p12" -k "$RUNNER_TEMP/scnotes-release.keychain-db" -P "$NOTES_SIGNING_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$NOTES_KEYCHAIN_PASSWORD" "$RUNNER_TEMP/scnotes-release.keychain-db" >/dev/null
+          security list-keychains -d user -s "$RUNNER_TEMP/scnotes-release.keychain-db"
+      - name: Preserve the published credential helper
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/scnotes-baseline"
+          gh release download v1.1 --repo "$GITHUB_REPOSITORY" --pattern SamsungCloudNotes-1.1.0-macOS.zip --dir "$RUNNER_TEMP/scnotes-baseline"
+          python3 - <<'PY'
+          import pathlib,os,hashlib
+          p=pathlib.Path(os.environ['RUNNER_TEMP'])/'scnotes-baseline/SamsungCloudNotes-1.1.0-macOS.zip'
+          assert hashlib.sha256(p.read_bytes()).hexdigest()=='a190ed538ccf55ed4eb86183688ec9591423e04d01c198f9e5a7d7da48c6d9b3'
+          PY
+          ditto -x -k "$RUNNER_TEMP/scnotes-baseline/SamsungCloudNotes-1.1.0-macOS.zip" "$RUNNER_TEMP/scnotes-baseline"
+      - name: Build, test and package the reviewed commit
+        env:
+          SIGNING_IDENTITY: ${{ secrets.NOTES_SIGNING_IDENTITY }}
+        run: |
+          export NOTES_CREDENTIAL_HELPER_APP="$RUNNER_TEMP/scnotes-baseline/Samsung Cloud Notes.app/Contents/Resources/CredentialStore.app"
+          bash scripts/build-macos.sh
+          python3 -m unittest discover -s Tests -p 'test_macos_release.py' -v
+          python3 scripts/package-macos-release.py --trusted-previous-app "$RUNNER_TEMP/scnotes-baseline/Samsung Cloud Notes.app"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reviewed-macos-release
+          path: dist/release-macos/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Remove ephemeral signing material
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/scnotes-release.keychain-db" || true
+          rm -f "$RUNNER_TEMP/scnotes-release.p12"
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: reviewed-macos-release
+          path: dist/release-macos/
+      - name: Publish verified release, then retire older Mac Preview records
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ inputs.channel }}
+        run: python3 scripts/publish-macos-release.py --repository "$GITHUB_REPOSITORY" --channel "$CHANNEL" --commit "$GITHUB_SHA"

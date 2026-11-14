@@ -2,7 +2,7 @@
 <h1 align="center">Samsung Cloud Notes</h1>
 <p align="center">Your Samsung notes on Mac, iPhone, iPad, any Android phone and the terminal.<br>Browse, read and edit directly through Samsung Cloud.</p>
 <p align="center">
-<img src="https://img.shields.io/badge/version-1.1.0-orange" alt="Version 1.1.0">
+<img src="https://img.shields.io/badge/version-1.1.1-orange" alt="Version 1.1.1">
 <img src="https://img.shields.io/badge/macOS-13%2B-black?logo=apple" alt="macOS 13 or newer">
 <img src="https://img.shields.io/badge/iOS-16%2B-black?logo=apple" alt="iOS 16 or newer">
 <img src="https://img.shields.io/badge/Android-8%2B-3DDC84?logo=android&logoColor=white" alt="Android 8 or newer">
@@ -12,7 +12,7 @@
 
 > **Unofficial interoperability project.** Not affiliated with, endorsed by, or supported by Samsung. These apps use reverse-engineered private APIs that can change without notice. No Samsung application, SDK, proprietary binaries or icon artwork is distributed here. Samsung Notes and Samsung Cloud are Samsung trademarks.
 
-> **New in 1.1:** an iPhone/iPad app, an Android app for any manufacturer and the `scnotes` command line. The Mac app keeps its 1.0 behavior. The new clients are early: see [validation](docs/validation.md) for what has and has not been exercised.
+> **New in 1.1.1:** fixes cloud uploads across **macOS, iOS, and standalone Android** so edits downsync cleanly to Samsung Notes on Windows and Android (fixing `spanOrderDataList` / paragraph/title encoding and the `Int32` `timeStamp` overflow in native parsers), adds [in-app Mac update checks behind the version number](docs/updates.md) and **Discard local changes**, and brings the **native Samsung Notes Android port** (`1.2.0-beta.3+5`) onto `main` as an **early beta (still untested on physical devices by the author)**. See [validation](docs/validation.md) for details.
 
 ## What it does
 
@@ -24,15 +24,16 @@
 - **Open and export.** Supported attachments, original cloud XML and a text copy.
 - **Script it.** `scnotes` lists, searches, prints, edits and exports notes from the terminal, with JSON output.
 
-| Client | Status in 1.1 |
+| Client | Status in 1.1.1 |
 | --- | --- |
-| macOS app | 13+, universal Apple Silicon / Intel; unchanged 1.0 feature set |
-| `scnotes` CLI | Runs inside the signed Mac app; read commands live-tested |
-| iPhone / iPad | iOS 16+, SwiftUI, same shared Swift core as the Mac; native sign-in and library sync live-tested in the simulator |
-| Android | 8.0+ (API 26), any manufacturer, Kotlin/Compose port; native sign-in and library sync live-tested on an emulator |
+| macOS app | 13+, universal Apple Silicon / Intel; verified upload/sync fix, in-app GitHub updater, draft recovery |
+| `scnotes` CLI | Runs inside the signed Mac app; `edit --resend` repairs legacy uploads |
+| iPhone / iPad | iOS 16+, SwiftUI, shares `Sources/Shared` upload/sync fix; offline simulator checks passed |
+| Android (standalone) | 8.0+ (API 26), Kotlin/Compose port aligned with `Cloud.swift` upload/sync/draft fixes; JVM unit tests & debug APK passed |
+| Android (native port — **Beta**) | Source-only patcher/bridge (`1.2.0-beta.3+5`) for owner-supplied Samsung Notes `4.4.48.15`; **beta, still untested by the author on real hardware** |
 | Windows | Optional connection-export helper, version 0.1.3 |
 
-**Why a native Android app instead of Samsung's APK?** Samsung Notes only syncs with Samsung Cloud on Galaxy devices, and redistributing Samsung's APK would be both unsupported and against this project's no-Samsung-binaries rule. The Android client speaks the same protocol as the Mac app instead.
+**Native Samsung editor beta (untested on real hardware):** the separate [native Android port](docs/android-native-port.md) retains Samsung's text, pen and page engine and supplies independent browser sign-in plus cloud sync. Its source-only builder takes an owner-supplied, hash-pinned Samsung Notes APK. `1.2.0-beta.3+5` passed synthetic/emulator checks during development, **but remains an unverified beta on physical Android devices (the author has not tested it in real use yet)**. Vendor-derived APKs are local test artifacts and are not distributed in this repository or on Releases. The Compose client above remains the fully authored Android alternative.
 
 ## Get started
 

@@ -3,51 +3,13 @@ package local.samsungcloudnotes
 import java.io.ByteArrayOutputStream
 import java.net.URI
 import java.net.URL
-import java.nio.ByteBuffer
-import java.nio.charset.CodingErrorAction
-import java.security.MessageDigest
-import java.util.Base64
 import java.util.UUID
-import javax.net.ssl.HttpsURLConnection
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
 // Port of Sources/Shared/Cloud.swift. Keep the two in step: request headers,
 // cursors, conflict checks and the readback verification are deliberately identical.
-
-class NotesException(message: String) : Exception(message)
-
-/** Strict UTF-8: malformed input is an error instead of replacement characters. */
-fun strictUtf8(bytes: ByteArray): String? = try {
-    Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).onUnmappableCharacter(CodingErrorAction.REPORT)
-        .decode(ByteBuffer.wrap(bytes)).toString()
-} catch (_: Exception) { null }
-
-fun base64Decode(value: String): ByteArray? = try { Base64.getDecoder().decode(value) } catch (_: IllegalArgumentException) { null }
-fun base64(bytes: ByteArray): String = Base64.getEncoder().encodeToString(bytes)
-fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
-fun ByteArray.hex(): String = joinToString("") { "%02x".format(it) }
-
-data class AccountSession(
-    val authorization: String,
-    val account: String,
-    val nativeID: String? = null,
-    val expiresAt: Long? = null, // epoch milliseconds
-) {
-    fun toJson(): String = JSONObject().apply {
-        put("authorization", authorization); put("account", account)
-        nativeID?.let { put("nativeID", it) }
-        expiresAt?.let { put("expiresAt", it) }
-    }.toString()
-    companion object {
-        fun fromJson(text: String): AccountSession {
-            val json = JSONObject(text)
-            return AccountSession(json.getString("authorization"), json.getString("account"),
-                json.optString("nativeID").ifEmpty { null }, if (json.has("expiresAt")) json.getLong("expiresAt") else null)
-        }
-    }
-}
 
 object StyledText {
     private val marker = Regex("<\\?.*?\\?>", RegexOption.DOT_MATCHES_ALL)
@@ -70,11 +32,41 @@ object StyledText {
         return base64Decode(compact)?.let(::strictUtf8)
             ?: throw NotesException("This text includes an unsupported span. Export the original document to retain it.")
     }
+    private fun normalized(text: String) = text.replace("\r\n", "\n").replace("\r", "\n")
     fun encode(text: String): String {
-        val count = text.length // UTF-16 code units, as Samsung counts them
-        val header = "<?a 'paragraph/alignment'='0' 'paragraph/parsingState'='False' 'span/fontSize'='1,12' 'span/foregroundColor'='1,-14342875' 'sectionData/sectionData'='$count'?>"
-        val tail = "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>"
-        return base64((header + base64(text.toByteArray()) + tail).toByteArray())
+        val clean = normalized(text)
+        if (clean.isEmpty()) return ""
+        val count = clean.length // UTF-16 code units, as Samsung counts them
+        val lines = clean.split('\n')
+        val payload = StringBuilder()
+        payload.append("<?a 'span/fontSize'='1,15.0' 'span/foregroundColor'='1,-14342875' 'paragraph/alignment'='0' 'paragraph/parsingState'='false' 'sectionData/sectionData'='$count'?>")
+        payload.append(base64(lines[0].toByteArray()))
+        for (line in lines.drop(1)) {
+            payload.append("<?a 'paragraph/alignment' 'paragraph/parsingState' 'paragraph/alignment'='0' 'paragraph/parsingState'='false'?>")
+            payload.append(base64(("\n" + line).toByteArray()))
+        }
+        payload.append("<?a 'span/fontSize' 'span/foregroundColor' 'paragraph/alignment' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>")
+        return base64(payload.toString().toByteArray())
+    }
+    fun encodeTitle(text: String): String {
+        val clean = normalized(text)
+        if (clean.isEmpty()) return ""
+        val lines = clean.split('\n')
+        val payload = StringBuilder()
+        payload.append("<?a 'paragraph/parsingState'='false'?>").append(base64(lines[0].toByteArray()))
+        for (line in lines.drop(1)) {
+            payload.append("<?a 'paragraph/parsingState' 'paragraph/parsingState'='false'?>").append(base64(("\n" + line).toByteArray()))
+        }
+        payload.append("<?a 'paragraph/parsingState'?>")
+        return base64(payload.toString().toByteArray())
+    }
+    fun spanOrderData(text: String): List<String> {
+        val count = normalized(text).length
+        if (count == 0) return emptyList()
+        return listOf(
+            base64("3,0,$count,1,15.0".toByteArray()),
+            base64("1,0,$count,1,-14342875".toByteArray()),
+        )
     }
 }
 
@@ -161,30 +153,87 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
 
     val locked: Boolean get() = resource.attr("isEncrypted") == "true" || resource.attr("isLocked") == "true"
 
+    val bodyNeedsNativeRepair: Boolean get() {
+        val obj = bodyObject ?: return false
+        if ((obj.attr("timeStamp").toLongOrNull() ?: 0L) > Int.MAX_VALUE) return true
+        if ((resource.first("attributes")?.attr("editTime")?.toLongOrNull() ?: 0L) > Int.MAX_VALUE) return true
+        val raw = obj.value("text").filterNot { it.isWhitespace() }
+        val decoded = base64Decode(raw)?.let(::strictUtf8) ?: return false
+        return decoded.contains("'paragraph/parsingState'='False'") || decoded.contains("'span/fontSize'='1,12'")
+    }
+
+    val titleNeedsNativeRepair: Boolean get() {
+        val obj = titleObject ?: return false
+        if ((obj.attr("timeStamp").toLongOrNull() ?: 0L) > Int.MAX_VALUE) return true
+        val raw = obj.value("text").filterNot { it.isWhitespace() }
+        val decoded = base64Decode(raw)?.let(::strictUtf8) ?: return false
+        return decoded.contains("span/fontSize") || decoded.contains("sectionData/sectionData") || decoded.contains("'paragraph/parsingState'='False'")
+    }
+
+    val needsNativeRepair: Boolean get() = bodyNeedsNativeRepair || titleNeedsNativeRepair
+
     fun uploadXml(newTitle: String, newBody: String, nowMillis: Long = System.currentTimeMillis()): ByteArray {
         textIssue?.let { throw NotesException(it) }
         if (locked) throw NotesException("Locked or encrypted notes cannot be edited by this version.")
-        val micros = (nowMillis * 1000).toString()
-        if (body != newBody) {
-            val obj = bodyObject; val text = obj?.first("text"); val tree = resource.first("noteTree")?.first("bodyText")
-            if (obj == null || text == null || tree == null) throw NotesException("This note has no supported typed-text body. Its drawings are retained in the original document.")
+        val previousSync = resource.attr("syncModifiedTime").toLongOrNull() ?: 0L
+        val previousEdit = resource.first("attributes")?.attr("modifiedTime")?.toLongOrNull() ?: 0L
+        val editMicros = maxOf(nowMillis * 1000L, (previousSync + 1L) * 1000L, previousEdit + 1L)
+        val micros = editMicros.toString()
+        val millis = (editMicros / 1000L).toString()
+        if (body != newBody || bodyNeedsNativeRepair) {
+            val obj = bodyObject; val tree = resource.first("noteTree")?.first("bodyText")
+            if (obj == null || tree == null) throw NotesException("This note has no supported typed-text body. Its drawings are retained in the original document.")
+            val text = obj.first("text") ?: XmlElement("text").also { obj.addChild(it) }
             text.stringValue = StyledText.encode(newBody)
-            obj.set("modifiedTime", micros); obj.set("timeStamp", micros)
+            val orderData = StyledText.spanOrderData(newBody)
+            val existingList = obj.first("spanOrderDataList")
+            if (existingList != null) {
+                existingList.elements("spanOrderData").forEach { it.detach() }
+                for (value in orderData) {
+                    existingList.addChild(XmlElement("spanOrderData").apply { set("val", value) })
+                }
+            } else if (orderData.isNotEmpty()) {
+                val list = XmlElement("spanOrderDataList")
+                for (value in orderData) {
+                    list.addChild(XmlElement("spanOrderData").apply { set("val", value) })
+                }
+                obj.addChild(list)
+            }
+            obj.first("zeroLengthSpanList")?.elements("zeroLengthSpan")?.forEach { it.detach() }
+            obj.set("modifiedTime", micros); obj.set("timeStamp", "0")
             val digest = sha256(obj.bytes).hex()
             obj.set("hash", digest); tree.set("h", digest); tree.set("t", micros)
         }
-        if (title != newTitle) {
+        if (title != newTitle || titleNeedsNativeRepair) {
             val obj = titleObject ?: throw NotesException("This note's title cannot be edited yet.")
+            val encodedTitle = StyledText.encodeTitle(newTitle)
             val field = obj.first("text")
-            if (field != null) field.stringValue = StyledText.encode(newTitle) else obj.addChild(XmlElement("text", StyledText.encode(newTitle)))
+            if (field != null) {
+                if (encodedTitle.isEmpty()) field.detach() else field.stringValue = encodedTitle
+            } else if (encodedTitle.isNotEmpty()) {
+                obj.addChild(XmlElement("text", encodedTitle))
+            }
+            obj.elements("spanOrderDataList").forEach { it.detach() }
+            obj.elements("zeroLengthSpanList").forEach { it.detach() }
             obj.set("modifiedTime", micros)
+            obj.set("timeStamp", "0")
             obj.set("hash", sha256(obj.bytes).hex())
         }
+        resource.set("syncModifiedTime", millis)
         resource.first("attributes")?.let { attrs ->
-            attrs.set("modifiedTime", micros); attrs.set("editTime", micros)
-            attrs.set("displayModifiedTime", nowMillis.toString())
+            attrs.set("modifiedTime", micros)
+            val editTime = attrs.attr("editTime")
+            if ((editTime.toLongOrNull() ?: 0L) > Int.MAX_VALUE || editTime.isEmpty()) attrs.set("editTime", "0")
+            attrs.set("displayModifiedTime", millis)
         }
         return resource.bytes
+    }
+
+    fun uploadTextDelta(title: String, body: String, nowMillis: Long = System.currentTimeMillis()): ByteArray {
+        val copy = XmlDocument(uploadXml(title, body, nowMillis))
+        val root = copy.rootElement() ?: throw NotesException("Could not prepare the note update.")
+        for (name in listOf("pageList", "contentFileList")) root.elements(name).forEach { it.detach() }
+        return root.bytes
     }
 }
 
@@ -283,7 +332,8 @@ class CloudClient(account: AccountSession, private val renew: suspend (AccountSe
         val remoteCommit = currentCommit(document.serverID)
         if (remoteCommit != document.commit) throw NotesException("This note changed on another device. Your draft is saved locally; reload the cloud copy before saving again.")
         LocalStore.backup(document)
-        val xml = document.uploadXml(title, body)
+        val previousSync = document.resource.attr("syncModifiedTime").toLongOrNull() ?: 0L
+        val xml = document.uploadTextDelta(title, body)
         val boundary = "SamsungNotesAndroid-" + UUID.randomUUID()
         val payload = ByteArrayOutputStream().apply {
             write("--$boundary\r\nContent-Disposition: form-data; name=\"noteResource\"\r\nContent-Type: application/xml\r\n\r\n".toByteArray())
@@ -292,6 +342,8 @@ class CloudClient(account: AccountSession, private val renew: suspend (AccountSe
         request("/samsungnotes/v1/notes/${document.serverID}/update", "POST", payload, "multipart/form-data; boundary=$boundary")
         val fresh = download(document.serverID)
         if (fresh.body != body || fresh.title != title) throw NotesException("Samsung accepted the upload, but its readback differs from the draft. The local draft and backup are retained.")
+        val nativeSync = fresh.resource.attr("syncModifiedTime").toLongOrNull() ?: -1L
+        if (nativeSync <= previousSync) throw NotesException("Samsung returned the saved text without advancing its phone sync timestamp. Your local draft and backup are retained; try saving again.")
         return fresh
     }
 
@@ -306,36 +358,5 @@ class CloudClient(account: AccountSession, private val renew: suspend (AccountSe
     companion object {
         fun initialCursor(type: String): String =
             base64("{\"appVersion\":\"0\",\"encryptedGuid\":\"\",\"modifiedTime\":0,\"purpose\":\"INITIAL\",\"requestTimeStamp\":0,\"sdkVersion\":\"0\",\"type\":\"$type\",\"version\":0}".toByteArray())
-    }
-}
-
-/** Minimal HTTPS transport. Redirects stay on HTTPS and drop credentials when the host changes. */
-object Http {
-    fun send(address: String, method: String, headers: Map<String, String>, body: ByteArray?, followRedirects: Boolean, timeoutMillis: Int = 40_000): Pair<Int, ByteArray> {
-        var url = URL(address)
-        var currentHeaders = headers
-        val originalHost = url.host
-        repeat(6) {
-            if (url.protocol != "https") throw NotesException("Refusing a non-HTTPS connection.")
-            val connection = url.openConnection() as HttpsURLConnection
-            try {
-                connection.instanceFollowRedirects = false
-                connection.useCaches = false
-                connection.connectTimeout = timeoutMillis; connection.readTimeout = timeoutMillis
-                connection.requestMethod = method
-                for ((name, value) in currentHeaders) connection.setRequestProperty(name, value)
-                if (body != null) { connection.doOutput = true; connection.setFixedLengthStreamingMode(body.size); connection.outputStream.use { it.write(body) } }
-                val status = connection.responseCode
-                if (followRedirects && status in 300..399 && status != 304) {
-                    val location = connection.getHeaderField("Location") ?: throw NotesException("Samsung returned a redirect without a destination.")
-                    url = URL(url, location)
-                    if (url.host != originalHost) currentHeaders = currentHeaders.filterKeys { !it.equals("Authorization", ignoreCase = true) }
-                    return@repeat
-                }
-                val stream = if (status >= 400) connection.errorStream else connection.inputStream
-                return status to (stream?.use { it.readBytes() } ?: ByteArray(0))
-            } finally { connection.disconnect() }
-        }
-        throw NotesException("Too many redirects.")
     }
 }

@@ -4,7 +4,7 @@ New in **1.1**. Both mobile apps sign in on the device itself, register their ow
 
 ## Why not Samsung's Android app?
 
-Samsung Notes is distributed for Galaxy devices; on other phones its Samsung Cloud sync is unavailable, and sideloaded copies are unsupported. Redistributing the APK would also break this project's rule of shipping no Samsung binaries. The Android client is therefore a native port of the Mac client's protocol code, not a wrapper around Samsung's app.
+Samsung Notes is distributed for Galaxy devices; on other phones its Samsung Cloud sync is unavailable, and sideloaded copies are unsupported. Redistributing the APK would also break this project's rule of shipping no Samsung binaries. The standalone Android client therefore speaks the same protocol directly instead of bundling Samsung's app. A separate source-only [native Android port](android-native-port.md) (`1.2.0-beta.3+5`) that patches an owner-supplied Samsung Notes `4.4.48.15` APK is also in the repository as an **early beta (still untested on real hardware by the author)** and is not shipped as a prebuilt APK.
 
 ## iPhone and iPad
 

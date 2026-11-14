@@ -14,3 +14,5 @@ dependencyResolutionManagement {
 }
 rootProject.name = "SamsungCloudNotes"
 include(":app")
+include(":auth-core")
+include(":native-bridge")

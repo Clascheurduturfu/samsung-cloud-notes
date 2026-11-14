@@ -14,6 +14,17 @@ if [ "${BUILD_UNIVERSAL:-1}" = "1" ]; then
 else
   cp dist/build/SamsungCloudNotes-arm64 "$APP/Contents/MacOS/SamsungCloudNotes"
 fi
+mkdir -p "$APP/Contents/Helpers"
+for ARCH in arm64 x86_64; do
+  if [ "$ARCH" = x86_64 ] && [ "${BUILD_UNIVERSAL:-1}" != 1 ]; then continue; fi
+  xcrun swiftc -swift-version 5 -parse-as-library -DUPDATE_INSTALLER -O -target "$ARCH-apple-macosx13.0" Sources/macOS/UpdateRelease.swift scripts/update-installer.swift -o "dist/build/UpdateInstaller-$ARCH"
+done
+if [ "${BUILD_UNIVERSAL:-1}" = 1 ]; then
+  xcrun lipo -create dist/build/UpdateInstaller-arm64 dist/build/UpdateInstaller-x86_64 -output "$APP/Contents/Helpers/UpdateInstaller"
+else
+  cp dist/build/UpdateInstaller-arm64 "$APP/Contents/Helpers/UpdateInstaller"
+fi
+bash scripts/sign-macos.sh "$APP/Contents/Helpers/UpdateInstaller"
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -27,6 +38,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>UpdateRepository</key><string>Clascheurduturfu/samsung-cloud-notes</string>
+<key>UpdateAssetPrefix</key><string>SamsungCloudNotes</string>
 </dict></plist>
 PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION%%-*}" "$APP/Contents/Info.plist"
@@ -40,3 +53,5 @@ cp docs/THIRD_PARTY_NOTICES.md "$APP/Contents/Resources/Notices/"
 cp docs/third-party/samsung-re-health-LICENSE.txt "$APP/Contents/Resources/Notices/"
 bash scripts/sign-macos.sh "$APP"
 "$APP/Contents/MacOS/SamsungCloudNotes" --self-test
+"$APP/Contents/MacOS/SamsungCloudNotes" --updater-state-test
+"$APP/Contents/Helpers/UpdateInstaller" --self-test

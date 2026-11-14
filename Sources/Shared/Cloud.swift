@@ -5,7 +5,7 @@ import FoundationXML
 import CryptoKit
 import Security
 
-let appVersion = "1.1.0"
+let appVersion = "1.1.1"
 let appShortVersion = appVersion.components(separatedBy: "-")[0]
 var transientSession: AccountSession?
 
@@ -76,11 +76,41 @@ enum StyledText {
         }
         return text
     }
+    static func normalized(_ text: String) -> String {
+        text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+    }
     static func encode(_ text: String) -> String {
-        let count = text.utf16.count
-        let header = "<?a 'paragraph/alignment'='0' 'paragraph/parsingState'='False' 'span/fontSize'='1,12' 'span/foregroundColor'='1,-14342875' 'sectionData/sectionData'='\(count)'?>"
-        let tail = "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>"
-        return Data((header + Data(text.utf8).base64EncodedString() + tail).utf8).base64EncodedString()
+        let clean = normalized(text)
+        guard !clean.isEmpty else { return "" }
+        let count = clean.utf16.count
+        let lines = clean.components(separatedBy: "\n")
+        var payload = "<?a 'span/fontSize'='1,15.0' 'span/foregroundColor'='1,-14342875' 'paragraph/alignment'='0' 'paragraph/parsingState'='false' 'sectionData/sectionData'='\(count)'?>"
+        payload += Data(lines[0].utf8).base64EncodedString()
+        for line in lines.dropFirst() {
+            payload += "<?a 'paragraph/alignment' 'paragraph/parsingState' 'paragraph/alignment'='0' 'paragraph/parsingState'='false'?>"
+            payload += Data(("\n" + line).utf8).base64EncodedString()
+        }
+        payload += "<?a 'span/fontSize' 'span/foregroundColor' 'paragraph/alignment' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>"
+        return Data(payload.utf8).base64EncodedString()
+    }
+    static func encodeTitle(_ text: String) -> String {
+        let clean = normalized(text)
+        guard !clean.isEmpty else { return "" }
+        let lines = clean.components(separatedBy: "\n")
+        var payload = "<?a 'paragraph/parsingState'='false'?>" + Data(lines[0].utf8).base64EncodedString()
+        for line in lines.dropFirst() {
+            payload += "<?a 'paragraph/parsingState' 'paragraph/parsingState'='false'?>" + Data(("\n" + line).utf8).base64EncodedString()
+        }
+        payload += "<?a 'paragraph/parsingState'?>"
+        return Data(payload.utf8).base64EncodedString()
+    }
+    static func spanOrderData(for text: String) -> [String] {
+        let count = normalized(text).utf16.count
+        guard count > 0 else { return [] }
+        return [
+            Data("3,0,\(count),1,15.0".utf8).base64EncodedString(),
+            Data("1,0,\(count),1,-14342875".utf8).base64EncodedString()
+        ]
     }
 }
 
@@ -153,36 +183,113 @@ final class CloudDocument {
         }
         drawingPages = (resource.first("pageList")?.elements(forName: "page") ?? []).enumerated().compactMap { index, page in DrawingPage(page, index: index) }
     }
+    var bodyNeedsNativeRepair: Bool {
+        guard let object = bodyObject else { return false }
+        if (Int64(object.attr("timeStamp")) ?? 0) > Int64(Int32.max) { return true }
+        if (Int64(resource.first("attributes")?.attr("editTime") ?? "") ?? 0) > Int64(Int32.max) { return true }
+        let raw = object.value("text")
+        if let data = Data(base64Encoded: raw.filter { !$0.isWhitespace }),
+           let decoded = String(data: data, encoding: .utf8),
+           decoded.contains("'paragraph/parsingState'='False'") || decoded.contains("'span/fontSize'='1,12'") {
+            return true
+        }
+        return false
+    }
+    var titleNeedsNativeRepair: Bool {
+        guard let object = titleObject else { return false }
+        if (Int64(object.attr("timeStamp")) ?? 0) > Int64(Int32.max) { return true }
+        let raw = object.value("text")
+        if let data = Data(base64Encoded: raw.filter { !$0.isWhitespace }),
+           let decoded = String(data: data, encoding: .utf8),
+           decoded.contains("span/fontSize") || decoded.contains("sectionData/sectionData") || decoded.contains("'paragraph/parsingState'='False'") {
+            return true
+        }
+        return false
+    }
+    var needsNativeRepair: Bool { bodyNeedsNativeRepair || titleNeedsNativeRepair }
     func uploadXML(title newTitle: String, body newBody: String, now: Date = Date()) throws -> Data {
         if let textIssue { throw NotesError.message(textIssue) }
         if resource.attr("isEncrypted") == "true" || resource.attr("isLocked") == "true" {
             throw NotesError.message("Locked or encrypted notes cannot be edited by this version.")
         }
-        if body != newBody {
-            guard let object = bodyObject, let text = object.first("text"),
+        // Android filters the change list using this millisecond timestamp before
+        // comparing object hashes. Text readback alone cannot verify native sync.
+        let previousSync = Int64(resource.attr("syncModifiedTime")) ?? 0
+        let previousEdit = Int64(resource.first("attributes")?.attr("modifiedTime") ?? "") ?? 0
+        let editMicros = max(Int64(now.timeIntervalSince1970 * 1_000_000), (previousSync + 1) * 1000, previousEdit + 1)
+        let micros = String(editMicros)
+        let millis = String(editMicros / 1000)
+        if body != newBody || bodyNeedsNativeRepair {
+            guard let object = bodyObject,
                   let tree = resource.first("noteTree")?.first("bodyText") else {
                 throw NotesError.message("This note has no supported typed-text body. Its drawings are retained in the original document.")
             }
+            let text: XMLElement
+            if let existing = object.first("text") { text = existing }
+            else {
+                let created = XMLElement(name: "text")
+                object.addChild(created)
+                text = created
+            }
             text.stringValue = StyledText.encode(newBody)
-            updateObject(object, tree: tree, now: now)
+            let orderData = StyledText.spanOrderData(for: newBody)
+            if let existingList = object.first("spanOrderDataList") {
+                for child in existingList.elements(forName: "spanOrderData") { child.detach() }
+                for val in orderData {
+                    let item = XMLElement(name: "spanOrderData")
+                    item.set("val", val)
+                    existingList.addChild(item)
+                }
+            } else if !orderData.isEmpty {
+                let list = XMLElement(name: "spanOrderDataList")
+                for val in orderData {
+                    let item = XMLElement(name: "spanOrderData")
+                    item.set("val", val)
+                    list.addChild(item)
+                }
+                object.addChild(list)
+            }
+            if let zeroList = object.first("zeroLengthSpanList") {
+                for child in zeroList.elements(forName: "zeroLengthSpan") { child.detach() }
+            }
+            updateObject(object, tree: tree, micros: micros)
         }
-        if title != newTitle {
+        if title != newTitle || titleNeedsNativeRepair {
             guard let object = titleObject else { throw NotesError.message("This note's title cannot be edited yet.") }
-            if let field = object.first("text") { field.stringValue = StyledText.encode(newTitle) }
-            else { object.addChild(XMLElement(name: "text", stringValue: StyledText.encode(newTitle))) }
-            object.set("modifiedTime", String(Int64(now.timeIntervalSince1970 * 1_000_000)))
+            let encodedTitle = StyledText.encodeTitle(newTitle)
+            if let field = object.first("text") {
+                if encodedTitle.isEmpty { field.detach() }
+                else { field.stringValue = encodedTitle }
+            } else if !encodedTitle.isEmpty {
+                object.addChild(XMLElement(name: "text", stringValue: encodedTitle))
+            }
+            for child in object.elements(forName: "spanOrderDataList") { child.detach() }
+            for child in object.elements(forName: "zeroLengthSpanList") { child.detach() }
+            object.set("modifiedTime", micros)
+            object.set("timeStamp", "0")
             object.set("hash", hash(object.bytes))
         }
-        let micros = String(Int64(now.timeIntervalSince1970 * 1_000_000))
+        resource.set("syncModifiedTime", millis)
         if let attrs = resource.first("attributes") {
-            attrs.set("modifiedTime", micros); attrs.set("editTime", micros)
-            attrs.set("displayModifiedTime", String(Int64(now.timeIntervalSince1970 * 1000)))
+            attrs.set("modifiedTime", micros)
+            if (Int64(attrs.attr("editTime")) ?? 0) > Int64(Int32.max) || attrs.attr("editTime").isEmpty {
+                attrs.set("editTime", "0")
+            }
+            attrs.set("displayModifiedTime", millis)
         }
         return resource.bytes
     }
-    private func updateObject(_ object: XMLElement, tree: XMLElement, now: Date) {
-        let micros = String(Int64(now.timeIntervalSince1970 * 1_000_000))
-        object.set("modifiedTime", micros); object.set("timeStamp", micros)
+    func uploadTextDelta(title: String, body: String, now: Date = Date()) throws -> Data {
+        let xml = try XMLDocument(data: uploadXML(title:title,body:body,now:now), options:[.nodeLoadExternalEntitiesNever])
+        guard let root = xml.rootElement() else { throw NotesError.message("Could not prepare the note update.") }
+        // The unchanged page/file objects already exist on the server. Sending
+        // them again declares binary multipart uploads (including strokeResource).
+        // Keep their complete hash tree so Samsung preserves the existing objects.
+        for name in ["pageList", "contentFileList"] { for child in root.elements(forName:name) { child.detach() } }
+        return root.bytes
+    }
+    private func updateObject(_ object: XMLElement, tree: XMLElement, micros: String) {
+        object.set("modifiedTime", micros); object.set("timeStamp", "0")
         let digest = hash(object.bytes)
         object.set("hash", digest); tree.set("h", digest); tree.set("t", micros)
     }
@@ -300,13 +407,17 @@ final class CloudClient {
         let remoteCommit = try await currentCommit(document.serverID)
         guard remoteCommit == document.commit else { throw NotesError.message("This note changed on another device. Your draft is saved locally; reload the cloud copy before saving again.") }
         try LocalStore.backup(document)
-        let xml = try document.uploadXML(title: title, body: body)
+        let previousSync = Int64(document.resource.attr("syncModifiedTime")) ?? 0
+        let xml = try document.uploadTextDelta(title: title, body: body)
         let boundary = "SamsungNotesMac-" + UUID().uuidString
         var payload = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"noteResource\"\r\nContent-Type: application/xml\r\n\r\n".utf8)
         payload.append(xml); payload.append(Data("\r\n--\(boundary)--\r\n".utf8))
         _ = try await request("/samsungnotes/v1/notes/\(document.serverID)/update", method: "POST", body: payload, contentType: "multipart/form-data; boundary=\(boundary)")
         let fresh = try await download(document.serverID)
         guard fresh.body == body, fresh.title == title else { throw NotesError.message("Samsung accepted the upload, but its readback differs from the draft. The local draft and backup are retained.") }
+        guard let nativeSync = Int64(fresh.resource.attr("syncModifiedTime")), nativeSync > previousSync else {
+            throw NotesError.message("Samsung returned the saved text without advancing its phone sync timestamp. Your local draft and backup are retained; try saving again.")
+        }
         return fresh
     }
     func downloadAsset(_ asset: AssetRecord) async throws -> Data {

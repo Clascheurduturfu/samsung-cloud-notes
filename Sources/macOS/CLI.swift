@@ -25,8 +25,9 @@ enum CommandLineTool {
       show NOTE [--xml]              Print a note's title and text (or original XML)
 
     Changes
-      edit NOTE [--title TEXT] [--body TEXT | --body-file PATH|-] [--discard-draft]
+      edit NOTE [--title TEXT] [--body TEXT | --body-file PATH|-] [--discard-draft] [--resend]
                                      Replace title and/or typed text, then save to Samsung Cloud
+                                     --resend advances phone sync for text already saved by older clients
       export NOTE DIRECTORY          Write NOTE.samsungnote (original XML, text, attachments)
       drawing NOTE OUTPUT.pdf        Write the approximate handwriting preview
 
@@ -55,7 +56,7 @@ enum CommandLineTool {
         var offline: Bool { flags.contains("offline") }
     }
     static let valueOptions: Set<String> = ["folder", "limit", "title", "body", "body-file"]
-    static let flagOptions: Set<String> = ["json", "offline", "trash", "xml", "discard-draft", "help"]
+    static let flagOptions: Set<String> = ["json", "offline", "trash", "xml", "discard-draft", "resend", "help"]
 
     static func run(_ arguments: [String]) -> Never {
         guard let command = arguments.first, !["help", "-h", "--help"].contains(command) else { print(usage); exit(0) }
@@ -311,17 +312,19 @@ enum CommandLineTool {
             newBody = text
         }
         let newTitle = options.value("title")
-        guard newBody != nil || newTitle != nil else { throw Failure(message: "Nothing to change: pass --title and/or --body/--body-file.", code: 2) }
+        let resend = options.flags.contains("resend")
+        guard newBody != nil || newTitle != nil || resend else { throw Failure(message: "Nothing to change: pass --title and/or --body/--body-file, or --resend to notify the phone of already saved text.", code: 2) }
         let library = try await Library.load(offline: false, strict: true)
         let record = try library.resolve(query)
-        guard !record.trashed else { throw Failure(message: "Restore this note from the trash on a Samsung device before editing it.") }
+        guard !record.trashed || (resend && newBody == nil && newTitle == nil) else { throw Failure(message: "Restore this note from the trash on a Samsung device before editing it.") }
         let document = try await library.client.download(record.id)
         if let issue = editIssue(document) { throw Failure(message: issue) }
         let title = newTitle ?? document.title, body = newBody ?? document.body
         if body != document.body && document.bodyObject == nil { throw Failure(message: "This note has no supported typed-text body.") }
-        guard title != document.title || body != document.body else { print("No changes; the cloud copy already matches."); return }
+        guard title != document.title || body != document.body || resend else { print("No changes; the cloud copy already matches."); return }
         // Never overwrite an unsaved draft from the window app without consent.
         let draftURL = try LocalStore.directory("Drafts").appendingPathComponent(record.id + ".json")
+        let draftStore = NoteDraftStore(), draftAtStart = try? NoteDraftStore().read(record.id)
         if let data = try? Data(contentsOf: draftURL), let draft = try? JSONSerialization.jsonObject(with: data) as? [String: String],
            draft["title"] != document.title || draft["body"] != document.body {
             guard options.flags.contains("discard-draft") else { throw Failure(message: "This note has an unsaved draft in the app. Save or reload it there, or pass --discard-draft to archive it and continue.") }
@@ -332,7 +335,7 @@ enum CommandLineTool {
         var index = library.index
         if let position = index.notes.firstIndex(where: { $0.id == record.id }) { index.notes[position].commit = fresh.commit; index.notes[position].describe(fresh) }
         try library.cache.saveIndex(index)
-        try LocalStore.writeDraft(id: record.id, title: fresh.title, body: fresh.body, commit: fresh.commit)
+        try draftStore.removeIfMatches(record.id,draft:draftAtStart)
         print("Saved \"\(fresh.title.isEmpty ? record.title : fresh.title)\" to Samsung Cloud and verified the readback. A pre-save backup is in \(LocalStore.root.appendingPathComponent("Backups").path).")
     }
 

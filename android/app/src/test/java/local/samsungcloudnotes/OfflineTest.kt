@@ -14,7 +14,7 @@ import org.junit.Test
 
 /** Mirrors Sources/Shared/SelfTest.swift: no network, Keystore or account access. */
 class OfflineTest {
-    private val fixtureXml = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\" unknownField=\"retain\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><attributes><title><object/></title></attributes><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\"><text>${StyledText.encode("Before")}</text></object></bodyText><pageList><page id=\"page\"><opaqueDrawing value=\"preserve\"/></page></pageList><contentFileList><contentFile id=\"asset\" hash=\"original\"/></contentFileList></noteResource><commitId>fixture-revision</commitId><downloadUrls/></CompareNoteView>"
+    private val fixtureXml = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\" unknownField=\"retain\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><attributes><title><object/></title></attributes><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\"><spanOrderDataList><spanOrderData val=\"stale\"/></spanOrderDataList><zeroLengthSpanList><zeroLengthSpan val=\"stale-zero\"/></zeroLengthSpanList><text>${StyledText.encode("Before")}</text></object></bodyText><pageList><page id=\"page\"><opaqueDrawing value=\"preserve\"/></page></pageList><contentFileList><contentFile id=\"asset\" hash=\"original\"/></contentFileList></noteResource><commitId>fixture-revision</commitId><downloadUrls/></CompareNoteView>"
 
     @Test fun pkceReferenceVector() {
         assertEquals("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", SamsungAuthCrypto.challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"))
@@ -39,7 +39,23 @@ class OfflineTest {
     }
 
     @Test fun styledTextRoundTrip() {
-        for (value in listOf("", "hello", "café — 日本語 🚀", "first\nsecond\n", "<&> \"quotes\"")) assertEquals(value, StyledText.decode(StyledText.encode(value)))
+        for (value in listOf("", "hello", "café — 日本語 🚀", "first\nsecond\n", "<&> \"quotes\"")) {
+            assertEquals(value, StyledText.decode(StyledText.encode(value)))
+            assertEquals(value.replace("\r\n", "\n"), StyledText.decode(StyledText.encodeTitle(value)))
+        }
+        assertEquals("", StyledText.encode(""))
+        assertEquals("", StyledText.encodeTitle(""))
+        val multi = String(base64Decode(StyledText.encode("first\nsecond"))!!)
+        assertTrue(multi.contains("'span/fontSize'='1,15.0'"))
+        assertTrue(multi.contains("'span/foregroundColor'='1,-14342875'"))
+        assertEquals(2, multi.split("'paragraph/alignment'='0'").size - 1)
+        assertEquals(2, multi.split("'paragraph/alignment' ").size - 1)
+        assertEquals(2, multi.split("'paragraph/parsingState'='false'").size - 1)
+        assertEquals(2, multi.split("'paragraph/parsingState' ").size - 1)
+        val titleEncoded = String(base64Decode(StyledText.encodeTitle("Title"))!!)
+        assertTrue(titleEncoded.contains("'paragraph/parsingState'='false'"))
+        assertTrue(!titleEncoded.contains("span/fontSize"))
+        assertTrue(!titleEncoded.contains("sectionData/sectionData"))
         val mixed = "<?a 'span/bold'='1,True'?>" + base64("one".toByteArray()) + "<?a 'span/bold'?>" + base64("\ntwo".toByteArray())
         assertEquals("one\ntwo", StyledText.decode(base64(mixed.toByteArray())))
     }
@@ -79,14 +95,56 @@ class OfflineTest {
     @Test fun uploadPreservesUnknownContent() {
         val fixture = CloudDocument("fixture", fixtureXml.toByteArray())
         assertEquals("Before", fixture.body)
-        val updated = XmlDocument(fixture.uploadXml("Test title", "After 日本語 🚀"))
+        val newBody = "After 日本語 🚀"
+        val updated = XmlDocument(fixture.uploadXml("Test title", newBody))
         val resource = updated.rootElement()!!
+        val updatedBodyObj = resource.first("bodyText")!!.first("object")!!
+        val updatedOrders = updatedBodyObj.first("spanOrderDataList")!!.elements("spanOrderData").map {
+            String(base64Decode(it.attr("val"))!!)
+        }
+        val updatedZeros = updatedBodyObj.first("zeroLengthSpanList")!!.elements("zeroLengthSpan")
         assertEquals("retain", resource.attr("unknownField"))
+        assertEquals("0", resource.first("attributes")!!.attr("editTime"))
+        assertEquals("0", updatedBodyObj.attr("timeStamp"))
+        assertEquals(listOf("3,0,${newBody.length},1,15.0", "1,0,${newBody.length},1,-14342875"), updatedOrders)
+        assertTrue(updatedZeros.isEmpty())
         assertEquals("preserve", resource.first("pageList")!!.first("page")!!.first("opaqueDrawing")!!.attr("value"))
         assertEquals("original", resource.first("contentFileList")!!.first("contentFile")!!.attr("hash"))
-        assertEquals("After 日本語 🚀", StyledText.decode(resource.first("bodyText")!!.first("object")!!.value("text")))
+        assertEquals(newBody, StyledText.decode(updatedBodyObj.value("text")))
+        assertEquals(StyledText.encodeTitle("Test title"), resource.first("attributes")!!.first("title")!!.first("object")!!.value("text"))
         assertEquals("Test title", StyledText.decode(resource.first("attributes")!!.first("title")!!.first("object")!!.value("text")))
-        assertEquals(resource.first("bodyText")!!.first("object")!!.attr("hash"), resource.first("noteTree")!!.first("bodyText")!!.attr("h"))
+        assertEquals(updatedBodyObj.attr("hash"), resource.first("noteTree")!!.first("bodyText")!!.attr("h"))
+
+        val legacyPayload = base64(("<?a 'paragraph/alignment'='0' 'paragraph/parsingState'='False' 'span/fontSize'='1,12' 'span/foregroundColor'='1,-14342875' 'sectionData/sectionData'='6'?>" + base64("Legacy".toByteArray()) + "<?a 'span/foregroundColor' 'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'?><?a 'sectionData/sectionData'='0' 'sectionData/sectionData'?>").toByteArray())
+        val legacyXml = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><attributes editTime=\"1794667044333760\"><title><object><text>$legacyPayload</text></object></title></attributes><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\" timeStamp=\"1794667044333760\"><spanOrderDataList><spanOrderData val=\"stale\"/></spanOrderDataList><text>$legacyPayload</text></object></bodyText></noteResource><commitId>legacy-rev</commitId></CompareNoteView>"
+        val legacyDoc = CloudDocument("legacy", legacyXml.toByteArray())
+        assertTrue(legacyDoc.needsNativeRepair)
+        val fixedResource = String(legacyDoc.uploadXml(legacyDoc.title, legacyDoc.body))
+        val fixedDoc = CloudDocument("legacy", "<CompareNoteView>$fixedResource<commitId>fixed-rev</commitId></CompareNoteView>".toByteArray())
+        assertTrue(!fixedDoc.needsNativeRepair)
+        assertEquals("Legacy", fixedDoc.body)
+        assertEquals("Legacy", fixedDoc.title)
+        assertEquals("0", fixedDoc.bodyObject!!.attr("timeStamp"))
+        assertEquals("0", fixedDoc.resource.first("attributes")!!.attr("editTime"))
+
+        val syncFixture = CloudDocument("sync-fixture", fixtureXml.toByteArray())
+        syncFixture.resource.set("syncModifiedTime", "1800000000000")
+        val saved = XmlDocument(syncFixture.uploadXml("Phone sync", "New body", nowMillis = 1_700_000_000_000L)).rootElement()!!
+        assertEquals("1800000000001", saved.attr("syncModifiedTime"))
+        assertEquals("1800000000001", saved.first("attributes")!!.attr("displayModifiedTime"))
+        assertEquals("1800000000001000", saved.first("attributes")!!.attr("modifiedTime"))
+        assertEquals("1800000000001000", saved.first("bodyText")!!.first("object")!!.attr("modifiedTime"))
+        assertEquals("1800000000001000", saved.first("noteTree")!!.first("bodyText")!!.attr("t"))
+        val repeated = XmlDocument(syncFixture.uploadXml("Phone sync", "New body", nowMillis = 1_700_000_000_000L)).rootElement()!!
+        assertEquals("1800000000002", repeated.attr("syncModifiedTime"))
+
+        val deltaFixture = CloudDocument("delta-fixture", fixtureXml.toByteArray())
+        val delta = XmlDocument(deltaFixture.uploadTextDelta("Changed", "New text")).rootElement()!!
+        assertNull(delta.first("pageList"))
+        assertNull(delta.first("contentFileList"))
+        assertNotNull(delta.first("noteTree"))
+        assertEquals("New text", StyledText.decode(delta.first("bodyText")!!.first("object")!!.value("text")))
+        assertEquals("preserve", deltaFixture.resource.first("pageList")!!.first("page")!!.first("opaqueDrawing")!!.attr("value"))
     }
 
     @Test fun cacheIsRevisionAndSessionScoped() {

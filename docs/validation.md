@@ -1,6 +1,46 @@
 # Validation scope
 
-Current release **1.1.0** (Git tag **v1.1**); its checks are listed under [1.1.0-beta.1](#110-beta1--21-october-2026), the code it promotes. The previous release is **1.0.0** (Git tag **v1.0**).
+Current release **1.1.1** (Git tag **v1.1.1**). Previous releases: **1.1.0** (Git tag **v1.1**) and **1.0.0** (Git tag **v1.0**).
+
+## Release 1.1.1 — 14 November 2026
+
+Release **1.1.1** resolves two native XML parsing bugs that prevented Mac uploads (and unpatched mobile ports sharing the same upload builder) from downsyncing into official Samsung Notes clients, brings the standalone Android port (`Cloud.kt`) into parity, and merges the native Android port tooling (`1.2.0-beta.3+5`, **beta — not yet tested by the owner on physical hardware**).
+
+- **Verified binary root causes:**
+  - Native C++ serializer (`libSpen_xmlSerializer.dll`, `RichTextXmlSerializer::SortSpanListWithOrderData` at `0x516e0`): `uploadXML` replaced body text without updating `<spanOrderDataList>` or clearing `<zeroLengthSpanList>`, wrote `'span/fontSize'='1,12'` and `'paragraph/parsingState'='False'`, left `'paragraph/alignment'='0'` unclosed across lines, and encoded `<title>` with body span/section tags instead of `<?a 'paragraph/parsingState'='false'?>`.
+  - Windows .NET Native parser (`SamsungNotes.dll`, `WDocObjectBase.ParseXml` at RVAs `0x64fbebb`..`0x64fbed8`): `<object timeStamp="...">` is parsed via `Convert.ToInt32`, so writing 64-bit microsecond epoch timestamps triggered `FAIL_PARSE_XML` (`ExceptionCode: 327`, Int32 overflow). Both `<object timeStamp>` and `<attributes editTime>` now keep `"0"`.
+- **Live cross-device sync verification:** Repaired all six affected cloud notes from the Mac client (`scnotes edit --resend --discard-draft`) and triggered sync on Windows Samsung Notes `4.3.831.0` (`Storage.sqlite` `NoteDB` count rose from `37` to `43`, all six present with `Corrupted = 0`) and Galaxy Tab S9+ (`SM_X810`: logcat confirmed `WCon_WNote: parseXml() - end`, `compareForDownsyncSucceed()`, and `onSyncEnded() : success, mResultCode = 0`; one pre-existing conflicted local note stayed conflict-marked on tablet UI as expected).
+- **Standalone Android alignment:** Updated `Cloud.kt`, `Store.kt`, `NotesViewModel.kt`, `Ui.kt`, and `OfflineTest.kt` to match `Cloud.swift` (`StyledText.encode`, `encodeTitle`, `spanOrderData`, `zeroLengthSpanList`, `timeStamp="0"`, `editTime="0"`, `syncModifiedTime`, `uploadTextDelta`, `removeDraftIfMatches`). Offline JVM unit tests passed (10 `OfflineTest` + 8 `:native-bridge` tests) and `:app:assembleDebug` built cleanly.
+- **Native Android port (`1.2.0-beta.3+5`, beta):** Source-only builder/bridge included on `main`; five Python patch-profile checks passed, **but physical-device usage has not been tested by the owner yet and remains beta**.
+
+## Local Mac draft recovery fix — 29 October 2026
+
+Version **1.1.1-beta.3** removes the false-draft recovery loop. Earlier clients stored successfully saved cloud baselines in `Drafts`; a later remote change could make that clean baseline appear to be conflicting unsaved work. Successful app/CLI saves now clear only the matching active draft. Opening a matching leftover baseline removes it, while actual differing edits remain protected.
+
+New isolated model/store checks cover clean-baseline migration followed by a remote edit, stale-draft recovery, offline discard, archived recovery contents, reopening without resurrection, pending debounce cancellation, reload without creating a new draft, fresh document revisions, matching-only save cleanup and failure to archive. An archive failure retains the active file and local edits. These checks use a temporary directory and no Samsung account/network access.
+
+The universal signed build passed shared, updater-state, draft and installer checks, and was installed and reopened on the owner's Mac. A desktop-session check confirmed version 1.1.1-beta.3, the saved account and 35 cached notes. The credential helper remained byte-for-byte unchanged. The downloaded release ZIP passed its manifest SHA-256, size, CRC, version and helper checks. Dedicated Mac build, package, rollback and diagnostic files were removed; only the installed app remains running. No notes were uploaded and no GitHub release was published for this local-draft check.
+
+## Local Mac updater and text-delta fix — 28 October 2026
+
+Version **1.1.1-beta.2** was built for both Mac architectures, locally signed, packaged, installed and reopened. The existing credential-helper binary is unchanged and the installed app still reads its saved sign-in and 35-note cache.
+
+- Embedded updater checks passed for version/channel selection, missing/ambiguous assets, digest failure, redirect safety, ZIP corruption/traversal/symlinks/expansion limits, a deleted release, stale channel responses, saved preferences and critical app activity. The original shared offline checks also passed.
+- The existing real GitHub v1.1 Mac asset was downloaded and verified against its API digest, archive contract, architecture, publisher and credential helper. It was not installed as a downgrade.
+- The actual installer replaced an isolated copy of the old app with the new bundle, relaunched it, received its transaction-specific startup acknowledgement and removed its staging/backup files. An earlier failed health check restored the isolated old bundle; injected launch-health failure and successful-swap fixture checks also passed. No user installation was used for the failure test.
+- Six publication-fixture checks passed, including verifying uploaded assets before publishing and retaining the previous Preview on verification failure. The manual hosted workflow/signing-secret setup has not been run; no push or release publication is implied.
+- A native text-and-pen test note reproduced HTTP 400/code 128406 for missing multipart `strokeResource` parts. A text-only delta then saved and restored its text while preserving both pages and all three stroke objects. The shipped delta method has an offline regression retaining the original opaque objects and complete hash tree.
+- Both v1 and native v3 cloud responses contained the two reported Mac text additions. The owner subsequently saw the Mac revision in the phone's Samsung Note conflict dialog. Windows still reported that note as an unresolved conflict after choosing a version. Delivery to the conflict UI is confirmed; completed native conflict resolution on every device is not.
+
+## Local Mac sync fix — 28 October 2026
+
+Version **1.1.1-beta.1**, locally built and installed; no GitHub release published. Two reported missing Android edits were present in a fresh Samsung Cloud download, while `noteResource.syncModifiedTime` still matched the old phone revision. The native Android change-list filter compares that millisecond clock against the locally stored server timestamp and can skip such updates.
+
+- The shared Apple save path now advances that clock monotonically, keeps attribute/object/tree edit clocks consistent, and verifies the returned native sync clock as well as title/text.
+- New offline regression checks passed for clock rollback and consecutive uploads. Both Mac architectures compiled; embedded self-tests and recursive signature verification passed.
+- Two affected notes were resent through the shipped CLI with `--resend`. Fresh cloud readback passed and each native sync timestamp advanced. The title/text fields and complete drawing page XML matched their pre-repair downloads exactly. Existing revision checks, pre-save backups and unsaved-draft protection remained enabled.
+- The installed credential helper is byte-for-byte unchanged, and the installed executable matches the verified downloaded universal ZIP. The diagnostic and selected private note identifiers are absent from the shipped executable.
+- A later phone screenshot confirmed arrival of the Mac version in Samsung's conflict dialog. Server acceptance/readback is still not proof that a native conflict resolution committed or that the phone applied the selected document.
 
 ## 1.0.0
 

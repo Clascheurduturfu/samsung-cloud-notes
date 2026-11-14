@@ -3,6 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 HELPER="$1"
 INSTALLED="/Applications/Samsung Cloud Notes.app/Contents/Resources/CredentialStore.app"
+if [ -n "${NOTES_CREDENTIAL_HELPER_APP:-}" ]; then INSTALLED="$NOTES_CREDENTIAL_HELPER_APP"; fi
 if [ -x "$HELPER/Contents/MacOS/CredentialStore" ]; then codesign --verify --strict "$HELPER"; exit 0; fi
 mkdir -p "$(dirname "$HELPER")"
 if [ -x "$INSTALLED/Contents/MacOS/CredentialStore" ]; then

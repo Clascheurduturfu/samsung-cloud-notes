@@ -15,7 +15,7 @@ android {
         applicationId = "local.samsungcloudnotes"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10100
+        versionCode = 10101
         versionName = appVersion
         buildConfigField("String", "APP_VERSION", "\"$appVersion\"")
     }
@@ -66,6 +66,7 @@ androidComponents {
 }
 
 dependencies {
+    implementation(project(":auth-core"))
     val composeBom = platform("androidx.compose:compose-bom:2026.09.00")
     implementation(composeBom)
     implementation("androidx.compose.material3:material3")

@@ -1,5 +1,52 @@
 # Changelog
 
+## 1.1.1 — 2026-11-14
+
+Stable 1.1.1, published as Git tag **v1.1.1**, fixing native upload/downsync compatibility across **macOS**, **iOS**, and the **standalone Android** client, and adding the **native Samsung Notes Android port** (source-only builder in **beta**, untested by the owner on real hardware).
+
+- **Native rich-text & `Int32` timestamp sync fix (Mac, iOS & standalone Android):**
+  - Synchronizes `<spanOrderDataList>` with the edited body UTF-16 length and font/color spans (`3,0,<len>,1,15.0` and `1,0,<len>,1,-14342875`), clears `<zeroLengthSpanList>`, fixes `'span/fontSize'='1,15.0'` and lowercase `'paragraph/parsingState'='false'`, closes/reopens per-line paragraph markers across newlines, and encodes `<title>` with `<?a 'paragraph/parsingState'='false'?>` without span/section tags. Previously native clients failed in `RichTextXmlSerializer::SortSpanListWithOrderData`.
+  - Sets `<object timeStamp="0">` on edited body/title objects and keeps/resets `<attributes editTime="0">`. Previously writing a 64-bit microsecond epoch timestamp caused Windows Samsung Notes (`WDocObjectBase.ParseXml`) to fail downsync with `FAIL_PARSE_XML` (`Int32` overflow).
+  - Automatically detects and repairs legacy client-edited XML on save, including `scnotes edit NOTE --resend` (also permitted for repair on trashed notes when text is unchanged).
+  - Ports `syncModifiedTime` monotonic advancement, text-only delta uploads (`uploadTextDelta`, omitting unchanged `pageList`/`contentFileList`), and non-stale draft cleanup (`removeDraftIfMatches` / **Discard local changes**) to the standalone Android Kotlin client (`Cloud.kt`, `Store.kt`, `NotesViewModel.kt`, `Ui.kt`), alongside Apple clients.
+- **Native Samsung Notes Android port (`1.2.0-beta.3+5`, Beta — not yet tested on physical devices by the author):**
+  - Merges the source-only native Android port tooling (`android-samsung-port/`, `android/auth-core/`, `android/native-bridge/`, [native port guide](docs/android-native-port.md)) into `main`.
+  - Takes an owner-supplied Samsung Notes `4.4.48.15` APK and adds browser OAuth/SCSP sign-in, Keystore credential storage, download-only default / optional two-way sync, offline editing, and standard Android document-picker `.sdocx` export/import. No vendor APK is distributed.
+  - Marked **beta**: only emulator checks have been run so far; real-device user testing is still pending.
+- Includes all Mac improvements from `1.1.1-beta.1` through `1.1.1-beta.3` (in-app GitHub Releases updater behind the version number, local draft recovery cleanup, and text-only delta saves).
+
+## 1.1.1-beta.3 (Mac local draft recovery) — 2026-10-29
+
+- Adds **Discard local changes** beside the stale-draft warning and for ordinary unsaved edits. It works offline, preserves recovery copies and removes the active draft without changing Samsung Cloud.
+- Stops storing successfully saved cloud copies as unsaved drafts; matching leftovers from older clients are cleaned up on open. Discarded edits cannot return through a pending autosave or a note reopen.
+- Makes **Reload cloud copy** explicit, disables concurrent actions while reloading and keeps downloaded cache revisions consistent with the document.
+- Removes duplicated channel explanations from the update popover.
+
+## 1.1.1-beta.2 (Mac updater and drawing-safe saves) — 2026-10-28
+
+- Click the version number for Stable/Preview update settings, persisted optional daily checks, GitHub Releases, progress and explicit Install & Restart.
+- Verify release assets, SHA-256, archive safety, bundle/version/architecture and the existing publisher/helper before installation. Retain rollback until the new app acknowledges startup; block handoff during active saves/sync/sign-in and preserve drafts.
+- Add universal release packaging and a manual signed-release workflow, with verified draft publication before scoped rolling Preview cleanup. No branch or release is published by adding this workflow.
+- Fix HTTP 400 `strokeResource` mismatches when saving text in a note containing handwriting: send a text-only delta and retain the complete hash tree referencing the existing server-side ink/files.
+- Samsung clients have detected the resent Mac revision but can still pause on a native per-note conflict. Keep both versions or compare them in Samsung Notes rather than treating cloud readback as proof of conflict resolution.
+
+## 1.1.1-beta.1 (Mac sync fix) — 2026-10-28
+
+- Advances the native note sync timestamp on saves. Previously, Samsung Cloud could return the edited text successfully while Samsung Notes on Android skipped the unchanged timestamp.
+- Verifies that the native sync timestamp advanced before reporting success, while retaining the existing text readback, revision checks, drafts and backups.
+- Adds `scnotes edit NOTE --resend` to repair previously saved text without changing its contents or bypassing draft/conflict checks.
+- Adds offline regression checks for a backwards clock and consecutive saves. This local beta is separate from the unreleased native Android port; the latest published Mac release remains v1.1.
+
+## 1.2.0-beta.3+5 — 2026-10-24
+
+Local native Android beta; the stable Apple and standalone Android clients retain their versions.
+
+- Runs the owner-supplied Samsung Notes 4.4.48.15 editor on generic Android, with independent browser sign-in and Keystore-protected credentials.
+- Adds native cloud downloads and optional two-way note/folder sync, offline editing, an email account menu, and standard Android file export/import.
+- Fixes cached page images hiding valid handwriting after reopening a document on the test emulator, while retaining native stroke objects.
+- Includes a hash-pinned source-only builder and sanitized authentication/compatibility findings. Vendor-derived APKs and private account material remain outside Git.
+- Validated on a generic ARM64 API 37 emulator, including independent Mac readback of a native upload/update and offline text/pen export/reimport. Real non-Samsung hardware and broader conflict/revocation coverage remain pending; see [native validation](docs/android-native-port.md).
+
 ## 1.1.0 — 2026-10-21
 
 Stable 1.1, published as Git tag **v1.1**, with downloads for all three platforms.

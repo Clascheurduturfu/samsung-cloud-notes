@@ -189,15 +189,36 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             }
             if (generation != taskGeneration || selection != id) return
             document = doc; title = doc.title; body = doc.body; draftConflict = false
-            if (force) withContext(Dispatchers.IO) { LocalStore.archiveDraft(id); LocalStore.writeDraft(id, doc.title, doc.body, doc.commit) }
+            if (force) {
+                withContext(Dispatchers.IO) { LocalStore.discardDraft(id) }
+                status = "Cloud copy loaded. Previous local edits are archived in DraftHistory."
+            }
             val draft = if (force) null else withContext(Dispatchers.IO) { LocalStore.readDraft(id) }
             if (draft != null && (draft.body != doc.body || draft.title != doc.title)) {
                 title = draft.title; body = draft.body
                 draftConflict = draft.commit != doc.commit
                 status = if (draftConflict) "Draft is based on an older revision. Reload to archive it and use the cloud copy." else "Recovered an unsaved local draft. Save when ready."
+            } else if (draft != null) {
+                withContext(Dispatchers.IO) { LocalStore.removeDraftIfMatches(id, draft) }
             }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { if (generation == taskGeneration && selection == id) error = failure.message }
+    }
+
+    fun discardLocalChanges() {
+        val doc = document ?: return
+        if (busy) return
+        draftJob?.cancel(); draftJob = null; generation++
+        try {
+            val current = if (dirty) LocalStore.Draft(title, body, doc.commit) else null
+            LocalStore.discardDraft(doc.serverID, current)
+            val baseline = loaded[doc.serverID] ?: doc
+            document = baseline; title = baseline.title; body = baseline.body
+            draftConflict = false; error = null
+            status = "Local changes discarded. Showing the downloaded cloud copy."
+        } catch (failure: Exception) {
+            error = "Could not archive your edits; the local draft was kept. ${failure.message}"
+        }
     }
 
     fun preserveDraft() {
@@ -226,7 +247,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             notes = notes.map { if (it.id == id) it.copy(commit = fresh.commit).also { record -> record.describe(fresh) } else it }
             withContext(Dispatchers.IO) {
                 cache?.save(fresh, fresh.commit)
-                LocalStore.writeDraft(id, savedTitle, savedBody, fresh.commit)
+                LocalStore.removeDraftIfMatches(id, LocalStore.Draft(savedTitle, savedBody, doc.commit))
                 cache?.saveIndex(CloudIndex(notes, folders))
             }
             if (selection == id) { document = fresh; title = fresh.title; body = fresh.body }

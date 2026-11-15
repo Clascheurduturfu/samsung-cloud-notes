@@ -138,7 +138,9 @@ struct NotesRootView: View {
             Label("All notes", systemImage: "doc.text").tag("all")
             if !model.folders.isEmpty {
                 Section("Folders") {
-                    ForEach(model.folders) { folder in Label(folder.name, systemImage: "folder").tag(folder.id) }
+                    ForEach(folderRows(model.folders)) { row in
+                        FolderSidebarRow(row: row).tag(row.folder.id)
+                    }
                 }
             }
             Label("Trash", systemImage: "trash").tag("trash")
@@ -268,4 +270,12 @@ struct NotesRootView: View {
         }
     }
     var body: some Scene { WindowGroup { NotesRootView() } }
+}
+
+private struct FolderSidebarRow: View {
+    let row: FolderRow
+    var body: some View {
+        Label(row.folder.name, systemImage: "folder")
+            .padding(.leading, CGFloat(row.depth) * 16)
+    }
 }

@@ -100,6 +100,22 @@ data class NoteRecord(
 }
 
 data class FolderRecord(val id: String, val name: String, val parent: String)
+data class FolderRow(val folder: FolderRecord, val depth: Int)
+
+fun folderRows(folders: List<FolderRecord>): List<FolderRow> {
+    val ids = folders.map { it.id }.toSet()
+    val visited = mutableSetOf<String>()
+    val rows = mutableListOf<FolderRow>()
+    fun append(folder: FolderRecord, depth: Int) {
+        if (!visited.add(folder.id)) return
+        rows.add(FolderRow(folder, depth))
+        folders.filter { it.parent == folder.id }.forEach { append(it, depth + 1) }
+    }
+    folders.filter { it.parent !in ids }.forEach { append(it, 0) }
+    folders.forEach { append(it, 0) }
+    return rows
+}
+
 data class CloudIndex(val notes: List<NoteRecord>, val folders: List<FolderRecord>)
 
 fun decodedCloudName(value: String): String {
@@ -301,7 +317,7 @@ class CloudClient(account: AccountSession, private val renew: suspend (AccountSe
         if (!completed) throw NotesException("The note index exceeded the pagination limit.")
         val folderXml = XmlDocument(request("/samsungnotes/v1/folder/changes?" + query("lastChangePoint", initialCursor("FOLDER"))))
         val folders = mutableListOf<FolderRecord>()
-        for (node in folderXml.rootElement()?.first("folderResource")?.first("nodeList")?.elements("node") ?: emptyList()) {
+        for (node in folderXml.rootElement()?.first("folderResource")?.descendants("node") ?: emptyList()) {
             val state = node.value("state")
             if (node.attr("type") == "folder" && state == "normal") {
                 folders.add(FolderRecord(node.attr("id"), decodedCloudName(node.value("name")), node.value("parentFolderNodeId")))

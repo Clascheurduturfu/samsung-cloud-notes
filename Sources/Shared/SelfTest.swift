@@ -47,6 +47,12 @@ enum SelfTest {
             }
         } else { throw NotesError.message("Encoded styled title was not base64 UTF-8.") }
         guard decodedCloudName(Data("Math notes\u{200b}".utf8).base64EncodedString()) == "Math notes", decodedCloudName(Data("Math notes 📒".utf8).base64EncodedString()) == "Math notes 📒", decodedCloudName("My notes") == "My notes" else { throw NotesError.message("Folder name decoding failed.") }
+        let folderFixture = "<root><folderResource><nodeList><node type=\"folder\" id=\"a\"><name>Parent</name><state>normal</state><parentFolderNodeId>root</parentFolderNodeId><nodeList><node type=\"folder\" id=\"b\"><name>Child</name><state>normal</state><parentFolderNodeId>a</parentFolderNodeId><nodeList><node type=\"note\" id=\"resource\"><state>normal</state><parentFolderNodeId>b</parentFolderNodeId></node></nodeList></node></nodeList></node></nodeList></folderResource></root>"
+        var folderNotes = ["note": NoteRecord(id: "note", resourceID: "resource", commit: "1", modified: 0, locked: false, encrypted: false)]
+        let parsedFolders = try applyFolderIndex(Data(folderFixture.utf8), notes: &folderNotes)
+        guard parsedFolders.map({ $0.id }) == ["a", "b"], parsedFolders.last?.parent == "a", folderNotes["note"]?.folder == "b" else { throw NotesError.message("Nested folder or note was not loaded.") }
+        let rows = folderRows([FolderRecord(id: "b", name: "Child", parent: "a"), FolderRecord(id: "a", name: "Parent", parent: "root"), FolderRecord(id: "c", name: "Orphan", parent: "missing")])
+        guard rows.map({ $0.id }) == ["a", "b", "c"], rows.map({ $0.depth }) == [0, 1, 0] else { throw NotesError.message("Folder hierarchy mismatch.") }
         let inkFixture = Data(base64Encoded: "/////wQAAACgDwAADQAAAAAADQAAAAEIAEoAAAABAEIAAAABAAEMAgAAAAAAAAAkQAAAAAAAADRAAAAAAAAAPkAAAAAAAABEQAAAAD8AAEA/AAAAAAoAAAACAFY0Ev8AAEBA")!
         let ink = try InkStroke(inkFixture)
         guard ink.points.count == 2, ink.points[1] == CGPoint(x: 30, y: 40), ink.color == 0xff123456 else { throw NotesError.message("Drawing coordinates or color mismatch.") }

@@ -53,6 +53,7 @@ enum SelfTest {
         guard parsedFolders.map({ $0.id }) == ["a", "b", "c"], parsedFolders.last?.parent == "b", folderNotes["note1"]?.folder == "b", folderNotes["note2"]?.folder == "c" else { throw NotesError.message("Nested folders and sibling notes were not loaded.") }
         let rows = folderRows([FolderRecord(id: "b", name: "Child", parent: "a"), FolderRecord(id: "a", name: "Parent", parent: "root"), FolderRecord(id: "c", name: "Orphan", parent: "missing")])
         guard rows.map({ $0.id }) == ["a", "b", "c"], rows.map({ $0.depth }) == [0, 1, 0] else { throw NotesError.message("Folder hierarchy mismatch.") }
+        guard visibleFolderRows(rows, collapsed: ["a"]).map({ $0.id }) == ["a", "c"], visibleFolderRows(rows, collapsed: []).map({ $0.id }) == ["a", "b", "c"] else { throw NotesError.message("Folder collapse mismatch.") }
         let inkFixture = Data(base64Encoded: "/////wQAAACgDwAADQAAAAAADQAAAAEIAEoAAAABAEIAAAABAAEMAgAAAAAAAAAkQAAAAAAAADRAAAAAAAAAPkAAAAAAAABEQAAAAD8AAEA/AAAAAAoAAAACAFY0Ev8AAEBA")!
         let ink = try InkStroke(inkFixture)
         guard ink.points.count == 2, ink.points[1] == CGPoint(x: 30, y: 40), ink.color == 0xff123456 else { throw NotesError.message("Drawing coordinates or color mismatch.") }

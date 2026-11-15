@@ -147,6 +147,18 @@ func folderRows(_ folders: [FolderRecord]) -> [FolderRow] {
     return rows
 }
 
+func visibleFolderRows(_ rows: [FolderRow], collapsed: Set<String>) -> [FolderRow] {
+    var hiddenBelow: Int?
+    return rows.filter { row in
+        if let depth = hiddenBelow {
+            if row.depth > depth { return false }
+            hiddenBelow = nil
+        }
+        if collapsed.contains(row.id) { hiddenBelow = row.depth }
+        return true
+    }
+}
+
 func applyFolderIndex(_ folderData: Data, notes: inout [String: NoteRecord]) throws -> [FolderRecord] {
     let folderXML = try XMLDocument(data: folderData, options: [.nodeLoadExternalEntitiesNever])
     var folders: [FolderRecord] = []

@@ -48,6 +48,10 @@ Page layers contain `object type="stroke"` elements with Base64 `strokeBinary` d
 
 This is an approximate stroke preview, not a complete Samsung canvas renderer. Advanced brush effects, erasers, rotations, floating-image composition and unsupported object types need further work. A real 105-stroke document rendered to an inspected PNG and a PDF with the expected page bounds. The complete active library produced five drawing pages and 772 supported strokes; generated PDF page counts matched.
 
+### Attached Samsung Notes previews (Mac)
+
+The Mac app can generate a read-only PDF handwriting preview for a supported single-page `.sdocx` attachment. It reads the classic `.page` layer/object frames and uses the existing stroke decoder; semitransparent strokes are drawn below opaque strokes as an approximation for highlighted handwriting. An adjacent save button retains the original attachment. Typed text, other objects, multi-page notes, exact pen effects and the attachment's position in the parent note are not supported. Unsupported archive and page layouts report an error. Page framing was informed by [Dietrich's format documentation](https://github.com/Downhillghost/Dietrich/blob/main/sdocx_specification/page_format_specification.md); no upstream source is bundled.
+
 ## Typed text
 
 The object's `text` field is base64-encoded UTF-8. Its decoded contents combine `<?a …?>` style markers with further base64-encoded UTF-8 text runs. Decoding only one base64 layer is insufficient. UTF-16 text length is used in the section metadata.

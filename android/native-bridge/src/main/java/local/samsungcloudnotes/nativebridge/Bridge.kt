@@ -24,7 +24,7 @@ import local.samsungcloudnotes.*
 
 /** The native editor remains Samsung's. This supplies the account/cloud boundary only. */
 object NotesBridge {
-    const val version = "1.2.0-beta.3+5"
+    const val version = "1.2.0-beta.3+6"
     private lateinit var context: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val refresh = Mutex()
@@ -36,6 +36,7 @@ object NotesBridge {
     @Volatile private var signingOut = false
     @Volatile private var credentials: NativeCredentials? = null
     @Volatile private var expired = false
+    @Volatile private var accountMessage: String? = null
     // The native request factory is patched to enforce NativeReadPolicy before
     // any note request is created, including streaming transfers.
     private const val NATIVE_READ_ENABLED = true
@@ -208,7 +209,7 @@ object NotesBridge {
                 val type = requireNotNull(companion).javaClass
                 type.getMethod("setSyncEnableByUserClick", Boolean::class.javaPrimitiveType).invoke(companion, true)
                 type.getMethod("requestSyncBackground").invoke(companion)
-                status(if (isNativeReadOnly()) "Downloading notesâ€¦" else "Syncing notesâ€¦")
+                status(if (isNativeReadOnly()) "Downloading notes…" else "Syncing notes…")
                 val result = withTimeoutOrNull(120_000) { syncCompletion?.await() }
                 status(when (result) { 0 -> lastSyncStatus(); null -> "Sync is still running. You can return to your notes."; else -> "Sync could not finish (code $result). Local notes and pending edits are kept." })
             } catch (error: CancellationException) { throw error }
@@ -218,12 +219,20 @@ object NotesBridge {
 
     fun attach(host: AccountActivity) { activity = WeakReference(host) }
     fun deliver(uri: Uri?) { if (uri?.scheme == "ms-app") browser?.complete(uri.toString()) }
+    fun signInPending(): Boolean = accountJob?.isActive == true
+    /** The in-progress account step, so returning from the browser does not hide it behind the sync status. */
+    fun pendingAccountMessage(): String? = accountMessage?.takeIf { signInPending() }
     fun connect(status: (String) -> Unit, done: () -> Unit) {
-        if (accountJob?.isActive == true) return
+        // A browser tab that is closed or lost never returns its callback. Tapping
+        // sign-in again replaces that attempt instead of waiting for its timeout.
+        val previous = accountJob
+        browser?.cancel(); browser = null
+        val report: (String) -> Unit = { message -> accountMessage = message; status(message) }
         accountJob = scope.launch {
+            previous?.cancelAndJoin()
             try {
-                status("Opening Samsung sign-inâ€¦")
-                val value = SamsungSignIn.signIn { message -> scope.launch { status(message) } }
+                report("Opening Samsung sign-in…")
+                val value = SamsungSignIn.signIn { message -> scope.launch { report(message) } }
                 try { bindAccount(value) } catch (error: Exception) { SamsungSignIn.signOut(); throw error }
                 credentials = value
                 signingOut = false
@@ -231,14 +240,14 @@ object NotesBridge {
                 status("Connected to Samsung Cloud. Choose download-only or two-way sync below.")
             } catch (error: CancellationException) { status("Sign-in cancelled.") }
             catch (error: Exception) { status(error.message ?: "Samsung sign-in failed.") }
-            finally { done() }
+            finally { accountMessage = null; done() }
         }
     }
     fun checkConnection(status: (String) -> Unit, done: () -> Unit) {
         if (accountJob?.isActive == true) return
         accountJob = scope.launch {
             try {
-                status("Checking the saved Samsung connectionâ€¦")
+                status("Checking the saved Samsung connection…")
                 withContext(Dispatchers.IO) {
                     val value = renewed()
                     val cursor = base64("{\"appVersion\":\"0\",\"encryptedGuid\":\"\",\"modifiedTime\":0,\"purpose\":\"INITIAL\",\"requestTimeStamp\":0,\"sdkVersion\":\"0\",\"type\":\"NOTE\",\"version\":0}".toByteArray())
@@ -288,7 +297,7 @@ class AccountActivity : Activity() {
     private lateinit var twoWay: android.widget.Switch
     private var rendering = false
 
-    fun showSyncStatus() { if (this::status.isInitialized) status.text = NotesBridge.lastSyncStatus() }
+    fun showSyncStatus() { if (this::status.isInitialized) status.text = NotesBridge.pendingAccountMessage() ?: NotesBridge.lastSyncStatus() }
 
     private fun render() {
         rendering = true
@@ -296,6 +305,7 @@ class AccountActivity : Activity() {
         account.text = NotesBridge.accountName().ifEmpty { "No Samsung account connected" }
         account.isClickable = signedIn
         connect.visibility = if (signedIn) android.view.View.GONE else android.view.View.VISIBLE
+        connect.text = if (NotesBridge.signInPending()) "Restart Samsung sign-in" else "Sign in with Samsung"
         twoWay.visibility = if (signedIn) android.view.View.VISIBLE else android.view.View.GONE
         twoWay.isChecked = !NotesBridge.isNativeReadOnly()
         sync.visibility = if (signedIn) android.view.View.VISIBLE else android.view.View.GONE
@@ -333,10 +343,11 @@ class AccountActivity : Activity() {
         connect = Button(this).apply {
             text = "Sign in with Samsung"
             setOnClickListener {
-                isEnabled = false
+                // Stays enabled: a second tap restarts a sign-in whose browser tab was lost.
                 NotesBridge.connect({ message -> runOnUiThread { status.text = message } }) {
-                    runOnUiThread { isEnabled = true; render() }
+                    runOnUiThread { render() }
                 }
+                render()
             }
         }
         sync = Button(this).apply {

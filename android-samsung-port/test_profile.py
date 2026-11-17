@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch as mock
 import patch as profile
-from hooks import method, read_only_folder_phase
+from hooks import bridge_sync_settings, internet_only_sync_permissions, method, read_only_folder_phase
 
 
 class ProfileGuards(unittest.TestCase):
@@ -18,6 +18,30 @@ class ProfileGuards(unittest.TestCase):
         for unsupported in ("", upload + upload):
             with self.assertRaisesRegex(ValueError, "upload phase differs"):
                 read_only_folder_phase(unsupported)
+
+    @staticmethod
+    def permission_list(first: str, second: str) -> str:
+        return (f'    const-string {first}, "android.permission.GET_ACCOUNTS"\n\n    const-string {second}, "android.permission.READ_PHONE_STATE"\n\n'
+                f'    filled-new-array {{{first}, {second}}}, [Ljava/lang/String;\n')
+
+    def test_sync_settings_ask_only_for_internet(self):
+        # The looped list (hard-coded length 2) becomes an empty method, never a
+        # shorter array: a one-element array there crashed Settings on open.
+        looped = (".method private final getRequiredPermissionsForSync()[Ljava/lang/String;\n    .locals 7\n\n"
+                  + self.permission_list("v0", "v1") + "    const/4 v4, 0x2\n    aget-object v4, v0, v3\n.end method\n")
+        helper = looped + self.permission_list("p0", "v3") + self.permission_list("v0", "v1")
+        scloud = self.permission_list("p0", "v0") + self.permission_list("p0", "v0")
+        new_helper, new_scloud = bridge_sync_settings(helper, scloud)
+        for result in (new_helper, new_scloud):
+            self.assertNotIn("GET_ACCOUNTS", result)
+            self.assertNotIn("READ_PHONE_STATE", result)
+            self.assertEqual(result.count('"android.permission.INTERNET"'), 2)
+        self.assertIn("new-array v0, v0, [Ljava/lang/String;\n    return-object v0\n.end method", new_helper)
+        self.assertNotIn("aget-object", new_helper)
+        self.assertIn("filled-new-array {p0}, [Ljava/lang/String;", new_scloud)
+        for unsupported in ("", scloud + scloud):
+            with self.assertRaisesRegex(ValueError, "expected 2 sync permission lists"):
+                internet_only_sync_permissions(unsupported, 2)
 
     def test_wrong_apk_is_rejected_without_mutating_decode(self):
         with tempfile.TemporaryDirectory() as name:

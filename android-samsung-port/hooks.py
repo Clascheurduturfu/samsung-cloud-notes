@@ -47,6 +47,38 @@ def connect_web_account_controller(text: str) -> str:
     return text.replace(before, after, 1)
 
 
+SYNC_PERMISSION_LIST = re.compile(
+    r'const-string (\w+), "android\.permission\.GET_ACCOUNTS"\n\n    const-string (\w+), "android\.permission\.READ_PHONE_STATE"\n\n'
+    r'    filled-new-array \{\1, \2\}, \[Ljava/lang/String;')
+
+
+def internet_only_sync_permissions(text: str, expected: int) -> str:
+    """Samsung's Sync settings keep their own Contacts/Phone lists, separate from
+    j3/a.c(). The bridge account path needs neither and the port does not declare
+    them, so these checks would report "Permissions required" forever. Ask for
+    Internet only, a normal permission that is always granted. Only call sites that
+    pass the array on as a whole may use this; an array indexed by a hard-coded
+    length must be replaced as a method instead."""
+    result, count = SYNC_PERMISSION_LIST.subn(
+        lambda m: f'const-string {m[1]}, "android.permission.INTERNET"\n\n    filled-new-array {{{m[1]}}}, [Ljava/lang/String;', text)
+    if count != expected:
+        raise ValueError(f"Unsupported input: expected {expected} sync permission lists, found {count}")
+    return result
+
+
+SYNC_HELPER = "smali_classes9/com/samsung/android/support/senl/nt/app/settings/main/SettingsSyncHelper.smali"
+SCLOUD_SETTING = "smali_classes9/com/samsung/android/support/senl/nt/app/settings/external/SCloudSetting.smali"
+NO_MISSING_PERMISSIONS = "    .locals 1\n    const/4 v0, 0x0\n    new-array v0, v0, [Ljava/lang/String;\n    return-object v0"
+
+
+def bridge_sync_settings(helper: str, scloud: str) -> tuple[str, str]:
+    # getRequiredPermissionsForSync loops a hard-coded length of 2, so its list is
+    # replaced as a whole method: nothing is missing on the bridge path.
+    helper = method(helper, "private final getRequiredPermissionsForSync()[Ljava/lang/String;", NO_MISSING_PERMISSIONS)
+    # onSCloudSettingSelected and its request lambda; SCloudSetting's two state checks.
+    return internet_only_sync_permissions(helper, 2), internet_only_sync_permissions(scloud, 2)
+
+
 def method(text: str, signature: str, body: str) -> str:
     pattern = re.compile(r"^\.method " + re.escape(signature) + r"\n.*?^\.end method$", re.M | re.S)
     replacement = f".method {signature}\n{body.rstrip()}\n.end method"
@@ -126,6 +158,9 @@ def native_hooks(decoded: Path) -> dict[Path, str]:
     edit("smali_classes10/com/samsung/android/support/senl/nt/base/common/util/DeviceUtils.smali",
          "public static final isSupportedFileProvider()Z", "    .locals 1\n    const/4 v0, 0x1\n    return v0")
     edit("smali_classes8/j3/a.smali", "public static c()Ljava/util/ArrayList;", getter("requiredSyncPermissions", "Ljava/util/ArrayList;"))
+    helper_path, scloud_path = decoded / SYNC_HELPER, decoded / SCLOUD_SETTING
+    changes[helper_path], changes[scloud_path] = bridge_sync_settings(
+        helper_path.read_text(encoding="utf-8"), scloud_path.read_text(encoding="utf-8"))
     helper = "smali_classes9/com/samsung/android/support/senl/nt/app/account/AccountHelper.smali"
     for name in ["getLoginSamsungAccountPopupIntent", "getRequestAccessTokenIntent"]:
         edit(helper, f"public static {name}(Landroid/content/Context;)Landroid/content/Intent;",

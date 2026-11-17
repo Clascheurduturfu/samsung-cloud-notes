@@ -1,6 +1,6 @@
 # Native Samsung Notes on generic Android
 
-Status: **early beta `1.2.0-beta.3+5` (untested by the owner on physical hardware; emulator-validated only)**, merged into `main` in `1.1.1`. This work keeps Samsung's Android editor and native document engine. The existing Compose Android client and Apple clients remain separate applications.
+Status: **early beta `1.2.0-beta.3+6` (untested by the owner on physical hardware; emulator-validated only)**, merged into `main` in `1.1.1`. This work keeps Samsung's Android editor and native document engine. The existing Compose Android client and Apple clients remain separate applications.
 
 ## Approach and reference
 
@@ -16,7 +16,7 @@ Using a current owner-provided version avoids committing to the much older 4.4.0
 - `android/native-bridge`: a small Android activity/provider and account-contract adapter. It compiles without Samsung classes, refers to listeners through their public callback signatures, and reuses the original APK's Kotlin/coroutines runtime.
 - `android-samsung-port`: source-only compatibility shims, hash-pinned patches and a local build tool. The caller supplies an owned original APK and local signing key.
 
-The account screen displays `1.2.0-beta.3+5`; the native package reports `4.4.48.15-native-beta.3`. Download-only mode is the initial setting. Enabling **Two-way sync** restores Samsung's original folder and note upload phases, serializer, revision comparison and pending-edit handling. This is an emulator-validated beta, not a claim of support for every Android device.
+The account screen displays `1.2.0-beta.3+6`; the native package reports `4.4.48.15-native-beta.3`. Download-only mode is the initial setting. Enabling **Two-way sync** restores Samsung's original folder and note upload phases, serializer, revision comparison and pending-edit handling. This is an emulator-validated beta, not a claim of support for every Android device.
 
 ## Using the native beta
 
@@ -45,6 +45,8 @@ Tests use a dedicated, non-rooted, Google Play ARM64 API 37 emulator on the Mac.
 | The WEB account constructor omits a token-controller reference used on login transitions | Connect the already-created token controller in that branch | Preserve native login-state listeners; no fake system account |
 | Sync availability requires Samsung branding and an installed Samsung Account package | Recognize the actual bridge account provider at that specific check | Existing power, demo-device and Knox restrictions are retained |
 | The old sync permission list requires Contacts/accounts and Phone access | Require only Internet for the bridge-based account path | Browser OAuth/UUID enrollment do not use system accounts, contacts or telephony IDs |
+| Settings → Sync keeps separate hard-coded Contacts/Phone checks (`SettingsSyncHelper`, `SCloudSetting`), so it showed "Can't sync data. Permissions required" forever (beta.3+6) | Report no missing permission there and ask for Internet only at the four other checks; the looped list is replaced as a whole method, because shrinking its array crashed Settings | Same bridge path as above; the port declares neither permission |
+| A sign-in whose browser tab is closed or lost kept the button disabled for 15 minutes, and returning to the screen hid its status (beta.3+6) | The button restarts the pending attempt; the current step stays visible | Account screen only |
 | Generic devices take an obsolete MediaStore `_data` export branch | Use the bundled AndroidX FileProvider and a standard document-picker share target | No broad storage permission or Samsung My Files dependency |
 | Generic Files apps report `.sdocx` as `application/octet-stream`, sometimes with opaque URIs | Add a filename-constrained handler plus an explicit document-picker import | Picker import validates the filename and ZIP signature; other binary files are not claimed |
 | Cached page images can hide valid pen strokes after reopen on the generic emulator | Regenerate disposable canvas caches for pages with loaded native strokes at document open | Preserve vector objects and pre-existing dirty state; leave opaque/cache-only pages alone |
@@ -89,6 +91,15 @@ The existing browser compatibility flags, encrypted callback handling, strict ac
 
 The functional paths above passed on generic ARM64 API 37. API 29/34, real non-Samsung hardware, concurrent multi-device native edits, interrupted binary transfers, revocation and cross-account sign-in attempts still need broader validation. Native conflict/history logic is retained, but the Mac client's previous synthetic stale-write check is not evidence that every native conflict case has passed. The emulator cannot establish performance, stylus pressure, palm rejection, battery behavior or compatibility with every Android vendor. AI, coediting, biometric-locked/encrypted notes and Samsung-only system integrations are separate unvalidated features.
 
+
+## Local validation record — 2026-11-17 (beta.3+6)
+
+- Samsung blocked browser sign-in from a Firebase Device Streaming Pixel ("Access denied, unusual activity", error 400). The same flow succeeded on the Mac's ARM64 API 37 emulator from a home connection.
+- `beta.3+6` was hot-patched onto the signed `beta.3` APK: only `classes9.dex` (sync settings hook) and `classes14.dex` (bridge) were replaced, then re-signed with the same local key. The update kept the existing sign-in.
+- Settings opened without a crash. **Sync with Samsung account** showed On and downloaded with read-only requests (`changes`, `compareForDownsync`, 0 blocked). Six patch-profile checks and the bridge JVM checks passed.
+- Two-way sync: reported working well on this build by the owner, tested by hand on the same emulator.
+- Pinned rebuild: `build.py --bridge` from the owner's 4.4.48.15 APK pulled from their own phone (SHA-256 matched the profile) with official Apktool 3.0.3 (hash matched), Temurin 21.0.13 and build-tools 37.0.0 succeeded. Output SHA-256 `735b2c263b341b33605300dab77fd87d27e06381ff7cd0ee341b6912740268ef`, same signing certificate. Installed as an update over the hot-patched build: sign-in kept, library and formatting shown, Settings opened with sync on and no permission message, no crash.
+- Not yet run: real non-Samsung hardware.
 
 ## Local validation record — 2026-10-24
 

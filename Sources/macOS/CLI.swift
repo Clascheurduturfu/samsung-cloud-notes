@@ -22,7 +22,8 @@ enum CommandLineTool {
                                      List notes, newest first
       folders                        List folders
       search QUERY                   Search titles and full typed text
-      show NOTE [--xml]              Print a note's title and text (or original XML)
+      show NOTE [--xml | --styles]   Print a note's title and text (or original XML, or
+                                     its formatting ranges without the text)
 
     Changes
       edit NOTE [--title TEXT] [--body TEXT | --body-file PATH|-] [--discard-draft] [--resend]
@@ -56,7 +57,7 @@ enum CommandLineTool {
         var offline: Bool { flags.contains("offline") }
     }
     static let valueOptions: Set<String> = ["folder", "limit", "title", "body", "body-file"]
-    static let flagOptions: Set<String> = ["json", "offline", "trash", "xml", "discard-draft", "resend", "help"]
+    static let flagOptions: Set<String> = ["json", "offline", "trash", "xml", "styles", "discard-draft", "resend", "help"]
 
     static func run(_ arguments: [String]) -> Never {
         guard let command = arguments.first, !["help", "-h", "--help"].contains(command) else { print(usage); exit(0) }
@@ -274,13 +275,14 @@ enum CommandLineTool {
         let record = try library.resolve(query)
         let document = try await library.document(record, fresh: false)
         if options.flags.contains("xml") { FileHandle.standardOutput.write(document.original); return }
+        if options.flags.contains("styles") { try printStyles(document, json: options.json); return }
         if options.json {
             var value = describe(record, library: library)
             value["title"] = document.title; value["body"] = document.body
             value["attachments"] = document.assets.filter { !$0.isInternal }.map { ["id": $0.id, "name": $0.fileName] }
             value["drawingPages"] = document.drawingPages.count
             value["editable"] = editIssue(document) == nil
-            if let issue = document.textIssue { value["textIssue"] = issue }
+            if let issue = editIssue(document) { value["textIssue"] = issue }
             try printJSON(value); return
         }
         print(document.title.isEmpty ? record.title : document.title)
@@ -292,11 +294,29 @@ enum CommandLineTool {
             if !attachments.isEmpty { print("Attachments: " + attachments.map(\.fileName).joined(separator: ", ")) }
             if !document.drawingPages.isEmpty { print("Drawing pages: \(document.drawingPages.count) (scnotes drawing \(record.id) out.pdf)") }
         }
-        if let issue = document.textIssue { fputs("scnotes: \(issue)\n", stderr) }
+        if let issue = editIssue(document) { fputs("scnotes: \(issue)\n", stderr) }
+    }
+
+    /// Formatting diagnostics: marker keys, values and UTF-16 offsets, never the note text.
+    static func printStyles(_ document: CloudDocument, json: Bool) throws {
+        guard let rich = document.richBody else { throw Failure(message: document.editIssue ?? "This note has no typed text.") }
+        let ranges = rich.ranges.sorted { $0.start != $1.start ? $0.start < $1.start : $0.sequence < $1.sequence }
+        if json {
+            try printJSON(["length": rich.text.utf16.count, "ranges": ranges.map { range -> [String: Any] in
+                var item: [String: Any] = ["key": range.key, "value": range.value, "start": range.start, "end": range.end]
+                if let type = range.typeID { item["spanType"] = type }
+                return item
+            }])
+            return
+        }
+        print("Text length: \(rich.text.utf16.count) UTF-16 units · \(ranges.count) style ranges")
+        for range in ranges {
+            print("\(range.start)..<\(range.end)\t\(range.key)\t\(range.value)" + (range.typeID.map { "\t(span type \($0))" } ?? ""))
+        }
     }
 
     static func editIssue(_ document: CloudDocument) -> String? {
-        if let issue = document.textIssue { return issue }
+        if let issue = document.editIssue { return issue }
         if document.resource.attr("isLocked") == "true" || document.resource.attr("isEncrypted") == "true" { return "Locked or encrypted notes cannot be edited by this version." }
         return nil
     }

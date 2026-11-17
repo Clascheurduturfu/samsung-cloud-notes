@@ -12,13 +12,15 @@
 
 > **Unofficial interoperability project.** Not affiliated with, endorsed by, or supported by Samsung. These apps use reverse-engineered private APIs that can change without notice. No Samsung application, SDK, proprietary binaries or icon artwork is distributed here. Samsung Notes and Samsung Cloud are Samsung trademarks.
 
+> **Preview 1.2.0-beta.1:** editing text no longer strips Samsung formatting. Bold, colours, highlights, sizes, alignment, lists and checklists survive Mac, iOS and Android edits, and the Mac/iOS apps show a read-only formatted view. See the [changelog](CHANGELOG.md).
+
 > **New in 1.1.1:** fixes cloud uploads across **macOS, iOS, and standalone Android** so edits downsync cleanly to Samsung Notes on Windows and Android (fixing `spanOrderDataList` / paragraph/title encoding and the `Int32` `timeStamp` overflow in native parsers), adds [in-app Mac update checks behind the version number](docs/updates.md) and **Discard local changes**, and brings the **native Samsung Notes Android port** (`1.2.0-beta.3+5`) onto `main` as an **early beta (still untested on physical devices by the author)**. See [validation](docs/validation.md) for details.
 
 ## What it does
 
 - **Connect anywhere.** Samsung's own browser login and verification on every platform; no Galaxy device, Samsung Notes install or Windows PC required.
 - **Browse your library.** Notes, folders, trash, title and typed-text search.
-- **Edit typed text.** Change a supported note's title and main text, then save to Samsung Cloud.
+- **Edit typed text.** Change a supported note's title and main text, then save to Samsung Cloud. Existing formatting is kept (1.2 preview).
 - **Keep local copies.** Persistent note/attachment caches, drafts, earlier drafts and pre-save backups.
 - **Preview drawings.** Supported handwriting strokes inline or as a generated PDF.
 - **Open and export.** Supported attachments, original cloud XML and a text copy.
@@ -79,7 +81,7 @@ Samsung's private services require an accepted Android compatibility profile on 
 ## Know the limits
 
 - Version 1.1 handles existing notes. Creating/deleting notes, a full S Pen editor and complete page composition are outside the current UI.
-- Editing text replaces formatting in that text object. Other original page objects, drawings and attachment references are retained. Locked/encrypted notes and unsupported text encodings are not editable.
+- Text is edited as plain text; existing formatting is carried over to the edited text (1.2 preview), but new formatting cannot be added yet. Other original page objects, drawings and attachment references are retained. Locked/encrypted notes, unsupported text encodings and formatting markup that cannot be modelled safely are not editable.
 - Drawing previews approximate width and pressure; complex brushes, erasers, rotations and image/background composition may differ or be unsupported.
 - Export creates a `.samsungnote` **folder archive for this client** (zipped on mobile), not a native Samsung `.sdocx` file.
 - Saves check the current revision first, keep a backup and verify text by downloading it again. Atomic server-side compare-and-swap has not been established. Keep an independent backup of important notes.

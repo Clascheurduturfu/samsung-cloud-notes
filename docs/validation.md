@@ -1,6 +1,20 @@
 # Validation scope
 
-Current release **1.1.1** (Git tag **v1.1.1**). Previous releases: **1.1.0** (Git tag **v1.1**) and **1.0.0** (Git tag **v1.0**).
+Current release **1.1.1** (Git tag **v1.1.1**). Previous releases: **1.1.0** (Git tag **v1.1**) and **1.0.0** (Git tag **v1.0**). Preview in progress: **1.2.0-beta.1**.
+
+## 1.2.0-beta.1 (formatting preservation) — 16 November 2026, in progress
+
+**Root cause.** `StyledText.decode` discarded every `<?a …?>` style marker, and `StyledText.encode` rebuilt the edited body with one default style. Any save therefore replaced Samsung formatting (spans, lists, checklists, alignment) with plain 15 pt text.
+
+**Format evidence.** Marker grammar (`'key'='value'` opens at the current UTF-16 offset, bare `'key'` closes), `spanOrderData` = `typeId,start,end,value` in native span order, `sectionData` = section length, and paragraphs owning their *leading* line break were confirmed on real captured cloud documents. Span type identifiers match the [sdocx](https://github.com/twangodev/sdocx) rich-text model; the XML attribute and bullet vocabulary (`bold`, `italic`, `underline`, `strikethrough`, `foregroundColor`, `backgroundColor`, `fontSize`, `fontName`, `hyperText`, `alignment`, `indentLevel`, `lineSpacing`, `bullet` with `digit`/`checker`/`solidCircle`, `parsingState`, `sectionData`, `objectSpan`) comes from strings in Windows `libSpen_xmlSerializer.dll` 4.3.831.0. The exact bullet/checkbox *value* layout has not been observed yet; it is preserved verbatim and only the preview interprets it.
+
+| Area | Check | Result |
+| --- | --- | --- |
+| Android JVM | 16 new `RichTextTest` cases (lossless re-encoding, insert/delete/replace, checklist continuation, line deletion and merge, legacy normalisation, unknown spans, unsupported markup, surrogate pairs, 300 randomised edits, `CloudDocument` save) plus the existing 10 `OfflineTest` and 8 native-bridge tests | Passed on Windows, JDK 21 |
+| Real documents | Opt-in `SCN_RICH_FIXTURES` run over the four captured cloud documents with text: paragraph ranges, re-encoding, exact `spanOrderData` reproduction, edit and upload XML | Passed; fixtures decrypted to a temporary folder and deleted afterwards |
+| Android build | `:app:assembleDebug` reporting `1.2.0-beta.1` | Passed |
+| Apple | Swift port (`RichText.swift`, `RichPreview.swift`) and mirrored `RichTextSelfTest` | **Not compiled yet**: Mac offline. Pending CI (`check-macos.sh`, `check-ios.sh`) and a local universal build |
+| Native downsync | Mac edit of a formatted note → Samsung Notes on Windows and Galaxy Tab with formatting intact | **Pending** |
 
 ## Release 1.1.1 — 14 November 2026
 

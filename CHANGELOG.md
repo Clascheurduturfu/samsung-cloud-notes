@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.0-beta.1 (formatting preservation) — 2026-11-16
+
+Preview release for **macOS, iOS and the standalone Android client**. Not yet verified against a native Samsung Notes downsync; see [validation](docs/validation.md).
+
+- **Text edits keep Samsung formatting.** Earlier versions rebuilt the whole body with one default style when saving, so bold, italic, underline, strikethrough, colours, highlights, font sizes, alignment, indentation, bullets, numbered lists and checklists written on a Samsung device were lost. The body is now parsed into opaque style ranges (`RichText`), remapped through a diff of the old and new text, and written back with a `spanOrderDataList` in Samsung's original span order. Styles this client does not understand are carried over unchanged.
+  - Typing inside or at the end of a styled run extends it; a new line typed in a checklist or list continues it; deleting a line takes its paragraph style with it; merged paragraphs keep the first paragraph's style.
+  - Notes whose markup cannot be modelled safely become read-only instead of being flattened.
+  - Repairs of plain notes saved by pre-1.1.1 clients (`scnotes edit --resend`) keep the verified 1.1.1 encoding.
+- **Formatted view (Mac and iOS).** Notes with formatting open in a read-only **Formatted** view showing styles, colours, highlights, sizes, alignment, bullets, numbers and checkboxes; **Edit text** switches to the plain editor. List and checkbox markers are best effort in this beta.
+- **`scnotes show NOTE --styles [--json]`** prints a note's formatting ranges (keys, values and offsets, never the text) for diagnosing formatting issues.
+- Version numbers: apps report `1.2.0-beta.1`; Android `versionCode` 10191; the separate native Android port keeps its own numbering, now `1.2.0-beta.3+6`.
+
 ## 1.1.1 — 2026-11-14
 
 Stable 1.1.1, published as Git tag **v1.1.1**, fixing native upload/downsync compatibility across **macOS**, **iOS**, and the **standalone Android** client, and adding the **native Samsung Notes Android port** (source-only builder in **beta**, untested by the owner on real hardware).

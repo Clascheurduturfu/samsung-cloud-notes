@@ -302,7 +302,7 @@ private fun Editor(model: NotesViewModel, openFile: (File, String) -> Unit, show
                     }
                 }
             }
-            document.textIssue?.let { Text(it, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) }
+            document.editIssue?.let { Text(it, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) }
             if (model.draftConflict) Text("This local draft is based on an older cloud revision. Reload the note to archive the draft and open the current cloud copy.",
                 style = MaterialTheme.typography.labelSmall, color = Orange, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
         }

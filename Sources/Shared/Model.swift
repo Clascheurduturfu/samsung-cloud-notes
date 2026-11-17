@@ -40,7 +40,7 @@ import Combine
     }
     var editable: Bool {
         guard let doc = document else { return false }
-        return doc.resource.attr("isLocked") != "true" && doc.resource.attr("isEncrypted") != "true" && doc.textIssue == nil && folder != "trash" && !draftConflict
+        return doc.resource.attr("isLocked") != "true" && doc.resource.attr("isEncrypted") != "true" && doc.editIssue == nil && folder != "trash" && !draftConflict
     }
     func connect(cacheOnly: Bool = false) async {
         do {

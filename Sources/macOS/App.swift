@@ -66,6 +66,7 @@ struct NotesView: View {
     @State var showingUpdates = false
     @State var importing = false
     @State var showDrawing = false
+    @State var showFormatted = true
     var body: some View {
         VStack(spacing: 0) {
         NavigationSplitView {
@@ -115,15 +116,25 @@ struct NotesView: View {
                     TextField("Title", text: $model.title).font(.title2).textFieldStyle(.plain).padding()
                         .disabled(!model.editable || model.busy)
                     Divider()
-                    if !document.drawingPages.isEmpty {
+                    let formatted = document.richBody.flatMap { $0.hasVisibleFormatting ? $0 : nil }
+                    if !document.drawingPages.isEmpty || formatted != nil {
                         HStack {
-                            Picker("View", selection: $showDrawing) { Text("Text").tag(false); Text("Drawing").tag(true) }.pickerStyle(.segmented).frame(width: 190)
+                            if !document.drawingPages.isEmpty {
+                                Picker("View", selection: $showDrawing) { Text("Text").tag(false); Text("Drawing").tag(true) }.pickerStyle(.segmented).frame(width: 190)
+                            }
+                            if formatted != nil && !showDrawing {
+                                Picker("Text view", selection: $showFormatted) { Text("Formatted").tag(true); Text("Edit text").tag(false) }
+                                    .pickerStyle(.segmented).labelsHidden().frame(width: 190)
+                                    .help("Formatting is kept when you edit the text. The formatted view is a preview.")
+                            }
                             Spacer()
-                            Button("Open drawing PDF") { model.showDrawing() }
+                            if !document.drawingPages.isEmpty { Button("Open drawing PDF") { model.showDrawing() } }
                         }.padding(10)
                     }
                     if showDrawing && !document.drawingPages.isEmpty { DrawingPreview(pages: document.drawingPages) }
-                    else {
+                    else if showFormatted, let formatted {
+                        RichTextPreview(rich: formatted.withText(StyledText.normalized(model.body)), baseSize: 15)
+                    } else {
                         TextEditor(text: $model.body).font(.system(size: 15)).padding(10)
                             .disabled(!model.editable || model.busy || document.bodyObject == nil)
                     }
@@ -136,7 +147,7 @@ struct NotesView: View {
                             }
                         }.padding(10) }
                     }
-                    if let issue = document.textIssue { Text(issue).font(.caption).foregroundStyle(.secondary).padding(10) }
+                    if let issue = document.editIssue { Text(issue).font(.caption).foregroundStyle(.secondary).padding(10) }
                     if model.draftConflict {
                         HStack(spacing:12) {
                             Text("These local edits are from an older cloud copy. Discard them to use the downloaded note.").foregroundStyle(.orange)
@@ -152,7 +163,7 @@ struct NotesView: View {
                             Button("Discard local changes") { model.discardLocalChanges() }.buttonStyle(.link).disabled(model.busy)
                         }
                         Spacer()
-                        Text("Plain text editing · drawings and attachments retained").foregroundStyle(.secondary)
+                        Text("Text edits keep formatting · drawings and attachments retained").foregroundStyle(.secondary)
                     }.font(.caption).padding(10)
                 }
             } else {
@@ -204,7 +215,10 @@ struct NotesView: View {
         .onChange(of: model.selection) { value in Task { await model.select(value) } }
         .onChange(of: model.title) { _ in model.scheduleDraft() }
         .onChange(of: model.body) { _ in model.scheduleDraft() }
-        .onChange(of: model.document?.serverID) { _ in showDrawing = model.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !(model.document?.drawingPages.isEmpty ?? true) }
+        .onChange(of: model.document?.serverID) { _ in
+            showDrawing = model.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !(model.document?.drawingPages.isEmpty ?? true)
+            showFormatted = true
+        }
         .onChange(of: model.folder) { _ in model.preserveDraft(); model.selection = model.visibleNotes.first?.id }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.preserveDraft() }
         .task { await model.connect() }

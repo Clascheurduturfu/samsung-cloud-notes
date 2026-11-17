@@ -48,7 +48,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     }
     val editable: Boolean get() {
         val doc = document ?: return false
-        return !doc.locked && doc.textIssue == null && folder != "trash" && !draftConflict
+        return !doc.locked && doc.editIssue == null && folder != "trash" && !draftConflict
     }
     val folderTitle: String get() = when (folder) { "all" -> "All notes"; "trash" -> "Trash"; else -> folders.firstOrNull { it.id == folder }?.name ?: "Notes" }
 

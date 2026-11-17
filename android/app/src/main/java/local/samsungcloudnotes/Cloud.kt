@@ -123,6 +123,10 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
     var title: String
     val assets = mutableListOf<AssetRecord>()
     val textIssue: String?
+    /** Lossless body formatting; null when the markup could not be modelled. */
+    val richBody: RichText?
+    /** Why body edits are refused: rewriting would lose formatting this version cannot model. */
+    val formattingIssue: String?
     val drawingPages: List<DrawingPage>
 
     init {
@@ -137,6 +141,17 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
         body = try { StyledText.decode(bodyObject?.value("text") ?: "") } catch (error: NotesException) { issues.add(error.message ?: ""); "" }
         title = try { StyledText.decode(titleObject?.value("text") ?: "") } catch (error: NotesException) { issues.add(error.message ?: ""); "" }
         textIssue = if (issues.isEmpty()) null else issues.joinToString(" ")
+        var rich: RichText? = null
+        var richIssue: String? = null
+        if (textIssue == null) {
+            try {
+                val order = bodyObject?.first("spanOrderDataList")?.elements("spanOrderData")?.map { it.attr("val") } ?: emptyList()
+                rich = RichText.parse(bodyObject?.value("text") ?: "", order)
+                if (rich.text != body) { rich = null; richIssue = "This note's formatting could not be matched to its text. It is read-only here so nothing is lost." }
+            } catch (error: NotesException) { richIssue = error.message }
+        }
+        richBody = rich
+        formattingIssue = richIssue
         val contentFiles = resource.first("contentFileList")?.elements("contentFile") ?: emptyList()
         val downloads = root.first("downloadUrls")
         for (download in downloads?.elements("downloadUrl") ?: emptyList()) {
@@ -152,6 +167,9 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
     }
 
     val locked: Boolean get() = resource.attr("isEncrypted") == "true" || resource.attr("isLocked") == "true"
+
+    /** Shown instead of editing when saving could damage the note. */
+    val editIssue: String? get() = textIssue ?: formattingIssue?.takeIf { richBody == null && body.isNotEmpty() }
 
     val bodyNeedsNativeRepair: Boolean get() {
         val obj = bodyObject ?: return false
@@ -183,9 +201,22 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
         if (body != newBody || bodyNeedsNativeRepair) {
             val obj = bodyObject; val tree = resource.first("noteTree")?.first("bodyText")
             if (obj == null || tree == null) throw NotesException("This note has no supported typed-text body. Its drawings are retained in the original document.")
+            val clean = newBody.replace("\r\n", "\n").replace("\r", "\n")
+            val rich = richBody
+            val encoded: String
+            val orderData: List<String>
+            // Repairs of plain notes written by older clients keep the verified 1.1.1 encoding.
+            val legacyRepair = bodyNeedsNativeRepair && rich?.hasOnlyDefaultStyling == true
+            if (rich != null && rich.text.isNotEmpty() && clean.isNotEmpty() && !legacyRepair) {
+                // Carry every span and paragraph style over to the edited text.
+                val updated = rich.withText(clean).normalizedForUpload()
+                encoded = updated.encode(); orderData = updated.spanOrderData()
+            } else {
+                if (rich == null && body.isNotEmpty()) throw NotesException(formattingIssue ?: "This note's formatting cannot be preserved by this version.")
+                encoded = StyledText.encode(newBody); orderData = StyledText.spanOrderData(newBody)
+            }
             val text = obj.first("text") ?: XmlElement("text").also { obj.addChild(it) }
-            text.stringValue = StyledText.encode(newBody)
-            val orderData = StyledText.spanOrderData(newBody)
+            text.stringValue = encoded
             val existingList = obj.first("spanOrderDataList")
             if (existingList != null) {
                 existingList.elements("spanOrderData").forEach { it.detach() }

@@ -15,7 +15,7 @@ android {
         applicationId = "local.samsungcloudnotes"
         minSdk = 26
         targetSdk = 36
-        versionCode = 10101
+        versionCode = 10191 // 1.2.0 betas use 10191-10199 so the 1.2.0 release (10200) still upgrades them
         versionName = appVersion
         buildConfigField("String", "APP_VERSION", "\"$appVersion\"")
     }

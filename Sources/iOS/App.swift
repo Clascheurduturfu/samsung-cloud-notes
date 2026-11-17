@@ -80,6 +80,7 @@ struct NotesRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
     @State private var showDrawing = false
+    @State private var showFormatted = true
     @State private var preview: URL?
     @State private var shared: SharedFile?
     @State private var confirmLogout = false
@@ -127,7 +128,10 @@ struct NotesRootView: View {
         .onChange(of: model.selection) { value in Task { await model.select(value) } }
         .onChange(of: model.title) { _ in model.scheduleDraft() }
         .onChange(of: model.body) { _ in model.scheduleDraft() }
-        .onChange(of: model.document?.serverID) { _ in showDrawing = model.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !(model.document?.drawingPages.isEmpty ?? true) }
+        .onChange(of: model.document?.serverID) { _ in
+            showDrawing = model.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !(model.document?.drawingPages.isEmpty ?? true)
+            showFormatted = true
+        }
         .onChange(of: model.folder) { _ in model.preserveDraft(); model.selection = nil }
         .onChange(of: scenePhase) { phase in if phase != .active { model.preserveDraft() } }
         .task { model.autoSelectFirst = false; await model.connect() }
@@ -200,8 +204,15 @@ struct NotesRootView: View {
                     Picker("View", selection: $showDrawing) { Text("Text").tag(false); Text("Drawing").tag(true) }
                         .pickerStyle(.segmented).padding(.horizontal).padding(.vertical, 8)
                 }
+                let formatted = document.richBody.flatMap { $0.hasVisibleFormatting ? $0 : nil }
+                if formatted != nil && !showDrawing {
+                    Picker("Text view", selection: $showFormatted) { Text("Formatted").tag(true); Text("Edit text").tag(false) }
+                        .pickerStyle(.segmented).padding(.horizontal).padding(.vertical, 8)
+                }
                 if showDrawing && !document.drawingPages.isEmpty { DrawingPreview(pages: document.drawingPages) }
-                else {
+                else if showFormatted, let formatted {
+                    RichTextPreview(rich: formatted.withText(StyledText.normalized(model.body)), baseSize: 17)
+                } else {
                     TextEditor(text: $model.body).font(.body).padding(.horizontal, 12)
                         .disabled(!model.editable || model.busy || document.bodyObject == nil)
                 }
@@ -217,7 +228,7 @@ struct NotesRootView: View {
                         }.padding(.horizontal).padding(.vertical, 8)
                     }
                 }
-                if let issue = document.textIssue { Text(issue).font(.caption).foregroundStyle(.secondary).padding(.horizontal).padding(.vertical, 6) }
+                if let issue = document.editIssue { Text(issue).font(.caption).foregroundStyle(.secondary).padding(.horizontal).padding(.vertical, 6) }
                 if model.draftConflict { Text("This local draft is based on an older cloud revision. Reload the note to archive the draft and open the current cloud copy.").font(.caption).foregroundStyle(.orange).padding(.horizontal).padding(.vertical, 6) }
             }
             .safeAreaInset(edge: .bottom, spacing: 0) { statusBar }

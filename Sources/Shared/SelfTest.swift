@@ -155,5 +155,7 @@ enum SelfTest {
               deltaFixture.resource.first("pageList")?.first("page")?.first("opaqueDrawing")?.attr("value") == "preserve" else {
             throw NotesError.message("Text delta declared unchanged binary uploads or lost the original drawing data.")
         }
+        try RichTextSelfTest.run()
+        try RichPreviewSelfTest.run()
     }
 }

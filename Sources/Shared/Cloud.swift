@@ -5,7 +5,7 @@ import FoundationXML
 import CryptoKit
 import Security
 
-let appVersion = "1.1.1"
+let appVersion = "1.2.0-beta.1"
 let appShortVersion = appVersion.components(separatedBy: "-")[0]
 var transientSession: AccountSession?
 
@@ -152,6 +152,10 @@ final class CloudDocument {
     var assets: [AssetRecord] = []
     let original: Data
     let textIssue: String?
+    /// Lossless body formatting; nil when the markup could not be modelled.
+    let richBody: RichText?
+    /// Why body edits are refused: rewriting would lose formatting this version cannot model.
+    let formattingIssue: String?
     var drawingPages: [DrawingPage] = []
     init(serverID: String, data: Data) throws {
         self.serverID = serverID; self.original = data
@@ -168,6 +172,17 @@ final class CloudDocument {
         do { title = try StyledText.decode(titleObject?.value("text") ?? "") }
         catch { title = ""; issues.append(error.localizedDescription) }
         textIssue = issues.isEmpty ? nil : issues.joined(separator: " ")
+        var rich: RichText?
+        var richIssue: String?
+        if textIssue == nil {
+            do {
+                let order = bodyObject?.first("spanOrderDataList")?.elements(forName: "spanOrderData").map { $0.attr("val") } ?? []
+                rich = try RichText.parse(bodyObject?.value("text") ?? "", orderData: order)
+                if rich?.text != body { rich = nil; richIssue = "This note's formatting could not be matched to its text. It is read-only here so nothing is lost." }
+            } catch { richIssue = error.localizedDescription }
+        }
+        richBody = rich
+        formattingIssue = richIssue
         let contentFiles = resource.first("contentFileList")?.elements(forName: "contentFile") ?? []
         for download in root.first("downloadUrls")?.elements(forName: "downloadUrl") ?? [] {
             let id = download.value("id")
@@ -207,6 +222,8 @@ final class CloudDocument {
         return false
     }
     var needsNativeRepair: Bool { bodyNeedsNativeRepair || titleNeedsNativeRepair }
+    /// Shown instead of editing when saving could damage the note.
+    var editIssue: String? { textIssue ?? (richBody == nil && !body.isEmpty ? formattingIssue : nil) }
     func uploadXML(title newTitle: String, body newBody: String, now: Date = Date()) throws -> Data {
         if let textIssue { throw NotesError.message(textIssue) }
         if resource.attr("isEncrypted") == "true" || resource.attr("isLocked") == "true" {
@@ -231,8 +248,20 @@ final class CloudDocument {
                 object.addChild(created)
                 text = created
             }
-            text.stringValue = StyledText.encode(newBody)
-            let orderData = StyledText.spanOrderData(for: newBody)
+            let clean = StyledText.normalized(newBody)
+            let encoded: String
+            let orderData: [String]
+            // Repairs of plain notes written by older clients keep the verified 1.1.1 encoding.
+            let legacyRepair = bodyNeedsNativeRepair && richBody?.hasOnlyDefaultStyling == true
+            if let rich = richBody, !rich.text.isEmpty, !clean.isEmpty, !legacyRepair {
+                // Carry every span and paragraph style over to the edited text.
+                let updated = rich.withText(clean).normalizedForUpload()
+                encoded = updated.encode(); orderData = try updated.spanOrderData()
+            } else {
+                if richBody == nil && !body.isEmpty { throw NotesError.message(formattingIssue ?? "This note's formatting cannot be preserved by this version.") }
+                encoded = StyledText.encode(newBody); orderData = StyledText.spanOrderData(for: newBody)
+            }
+            text.stringValue = encoded
             if let existingList = object.first("spanOrderDataList") {
                 for child in existingList.elements(forName: "spanOrderData") { child.detach() }
                 for val in orderData {

@@ -29,7 +29,7 @@ extension RichText {
 
     func previewParagraphs() -> [RichParagraph] {
         let units = Array(text.utf16)
-        let newline = UInt16(ascii: "\n")
+        let newline = UInt16(UInt8(ascii: "\n"))
         let starts = [0] + units.indices.filter { $0 > 0 && units[$0] == newline }
         let spans = ranges.filter { $0.isSpan && !$0.isEmpty }
         var result: [RichParagraph] = []
@@ -57,7 +57,7 @@ extension RichText {
                 numbering[paragraph.indent] = next
                 paragraph.marker = .number(next)
             } else if paragraph.marker == .plain { numbering = [:] }
-            var boundaries = Set([contentStart, end])
+            var boundaries: Set<Int> = [contentStart, end]
             for span in spans where span.start < end && span.end > contentStart {
                 boundaries.insert(max(span.start, contentStart)); boundaries.insert(min(span.end, end))
             }

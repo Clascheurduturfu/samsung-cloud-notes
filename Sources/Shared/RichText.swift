@@ -48,7 +48,7 @@ struct RichText {
     ]
     private static let marker = try! NSRegularExpression(pattern: "<\\?(.*?)\\?>", options: [.dotMatchesLineSeparators])
     private static let token = try! NSRegularExpression(pattern: "'([^']*)'(?:='([^']*)')?")
-    private static let newline = UInt16(ascii: "\n")
+    private static let newline = UInt16(UInt8(ascii: "\n"))
 
     static func parse(_ encoded: String, orderData: [String] = []) throws -> RichText {
         if encoded.isEmpty { return RichText(text: "", ranges: []) }
@@ -275,7 +275,7 @@ struct RichText {
 /// decreases, so a style range [s, e) maps to [lowerBound(s), lowerBound(e)).
 enum TextDiff {
     private static let maxEditDistance = 2000
-    private static let newline = UInt16(ascii: "\n")
+    private static let newline = UInt16(UInt8(ascii: "\n"))
 
     static func origins(_ old: [UInt16], _ new: [UInt16]) -> [Int] {
         let n = old.count, m = new.count

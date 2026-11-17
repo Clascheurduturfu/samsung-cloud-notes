@@ -13,7 +13,7 @@ Current release **1.1.1** (Git tag **v1.1.1**). Previous releases: **1.1.0** (Gi
 | Android JVM | 16 new `RichTextTest` cases (lossless re-encoding, insert/delete/replace, checklist continuation, line deletion and merge, legacy normalisation, unknown spans, unsupported markup, surrogate pairs, 300 randomised edits, `CloudDocument` save) plus the existing 10 `OfflineTest` and 8 native-bridge tests | Passed on Windows, JDK 21 |
 | Real documents | Opt-in `SCN_RICH_FIXTURES` run over the four captured cloud documents with text: paragraph ranges, re-encoding, exact `spanOrderData` reproduction, edit and upload XML | Passed; fixtures decrypted to a temporary folder and deleted afterwards |
 | Android build | `:app:assembleDebug` reporting `1.2.0-beta.1` | Passed |
-| Apple | Swift port (`RichText.swift`, `RichPreview.swift`) and mirrored `RichTextSelfTest` | **Not compiled yet**: Mac offline. Pending CI (`check-macos.sh`, `check-ios.sh`) and a local universal build |
+| Apple | Swift port (`RichText.swift`, `RichPreview.swift`) and mirrored `RichTextSelfTest` | `check-macos.sh` (arm64 + x86_64) and `check-ios.sh` (simulator build, shared self-tests) passed on the owner's Mac, Xcode 27.2, after fixing two compile errors CI caught |
 | Native downsync | Mac edit of a formatted note → Samsung Notes on Windows and Galaxy Tab with formatting intact | **Pending** |
 
 ## Release 1.1.1 — 14 November 2026

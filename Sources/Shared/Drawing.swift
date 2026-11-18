@@ -60,7 +60,7 @@ struct InkStroke {
     let points: [CGPoint]
     let color: UInt32
     let width: Double
-    init(_ data: Data) throws {
+    init(_ data: Data, pageFile: Bool = false) throws {
         var stream = InkBytes(data)
         guard try stream.integer(4) == 0xffffffff, try stream.integer(4) == 4,
               try stream.integer(4) == 4000 else { throw NotesError.message("Unsupported cloud stroke version.") }
@@ -104,7 +104,7 @@ struct InkStroke {
         color = InkFrame.bit(ink.fields, 2) ? UInt32(try style.integer(4)) : 0xff000000
         let penWidth = InkFrame.bit(ink.fields, 3) ? try style.number(4) : 1
         guard penWidth >= 0, penWidth <= 1000 else { throw NotesError.message("Unsupported drawing pen size.") }
-        width = max(0.3, penWidth * max(0.15, totalPressure / Double(count)))
+        width = max(0.3, penWidth * (pageFile ? 0.6 : max(0.15, totalPressure / Double(count))))
     }
 }
 
@@ -115,6 +115,10 @@ struct DrawingPage: Identifiable {
     var background: UInt32
     var strokes: [InkStroke]
     var unsupported = 0
+    init(id: Int, width: Double, height: Double, background: UInt32, strokes: [InkStroke], unsupported: Int = 0) {
+        self.id = id; self.width = width; self.height = height; self.background = background
+        self.strokes = strokes; self.unsupported = unsupported
+    }
     init?(_ page: XMLElement, index: Int) {
         id = index
         width = Double(page.attr("width")) ?? 720

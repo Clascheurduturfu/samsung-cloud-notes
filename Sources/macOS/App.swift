@@ -67,6 +67,7 @@ struct NotesView: View {
     @State var importing = false
     @State var showDrawing = false
     @State var showFormatted = true
+    @State private var collapsedFolders: Set<String> = []
     var body: some View {
         VStack(spacing: 0) {
         NavigationSplitView {
@@ -74,7 +75,9 @@ struct NotesView: View {
             List(selection: $model.folder) {
                 Label("All notes", systemImage: "doc.text").tag("all")
                 Section("Folders") {
-                    ForEach(model.folders) { folder in Label(folder.name, systemImage: "folder").tag(folder.id) }
+                    ForEach(visibleFolderRows(folderRows(model.folders), collapsed: collapsedFolders)) { row in
+                        FolderSidebarRow(row: row, hasChildren: model.folders.contains { $0.parent == row.id && $0.id != row.id }, collapsed: $collapsedFolders).tag(row.folder.id)
+                    }
                 }
                 Label("Trash", systemImage: "trash").tag("trash")
             }
@@ -390,4 +393,29 @@ struct NotesView: View {
             }
     }
 
+}
+
+private struct FolderSidebarRow: View {
+    let row: FolderRow
+    let hasChildren: Bool
+    @Binding var collapsed: Set<String>
+    var body: some View {
+        HStack(spacing: 4) {
+            if hasChildren {
+                Button {
+                    if collapsed.contains(row.id) { collapsed.remove(row.id) }
+                    else { collapsed.insert(row.id) }
+                } label: {
+                    Image(systemName: collapsed.contains(row.id) ? "chevron.right" : "chevron.down")
+                        .frame(width: 14)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(collapsed.contains(row.id) ? "Expand \(row.folder.name)" : "Collapse \(row.folder.name)")
+            } else {
+                Color.clear.frame(width: 14, height: 1)
+            }
+            Label(row.folder.name, systemImage: "folder")
+        }
+        .padding(.leading, CGFloat(row.depth) * 16)
+    }
 }

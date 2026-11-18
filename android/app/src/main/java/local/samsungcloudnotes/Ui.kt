@@ -164,8 +164,9 @@ private fun Library(model: NotesViewModel, onLogout: () -> Unit) {
                 NavigationDrawerItem(label = { Text("All notes") }, selected = model.folder == "all", onClick = { choose("all") }, modifier = Modifier.padding(horizontal = 12.dp))
                 if (model.folders.isNotEmpty()) {
                     Text("Folders", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 28.dp, vertical = 8.dp))
-                    model.folders.forEach { folder ->
-                        NavigationDrawerItem(label = { Text(folder.name) }, selected = model.folder == folder.id, onClick = { choose(folder.id) }, modifier = Modifier.padding(horizontal = 12.dp))
+                    folderRows(model.folders).forEach { row ->
+                        val folder = row.folder
+                        NavigationDrawerItem(label = { Text(folder.name) }, selected = model.folder == folder.id, onClick = { choose(folder.id) }, modifier = Modifier.padding(start = 12.dp + (row.depth * 16).dp, end = 12.dp))
                     }
                 }
                 NavigationDrawerItem(label = { Text("Trash") }, selected = model.folder == "trash", onClick = { choose("trash") }, modifier = Modifier.padding(horizontal = 12.dp))

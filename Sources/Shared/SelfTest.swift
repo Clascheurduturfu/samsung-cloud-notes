@@ -118,7 +118,8 @@ enum SelfTest {
         let updatedOrders = updatedBodyObj?.first("spanOrderDataList")?.elements(forName: "spanOrderData").map {
             Data(base64Encoded: $0.attr("val")).flatMap { String(data: $0, encoding: .utf8) } ?? ""
         } ?? []
-        let updatedZeros = updatedBodyObj?.first("zeroLengthSpanList")?.elements(forName: "zeroLengthSpan") ?? []
+        // Samsung parsers crash on an empty list element, so it must be removed, not emptied.
+        let updatedZeros = updatedBodyObj?.elements(forName: "zeroLengthSpanList") ?? []
         guard updated.rootElement()?.attr("unknownField") == "retain",
               updated.rootElement()?.first("attributes")?.attr("editTime") == "0",
               updatedBodyObj?.attr("timeStamp") == "0",

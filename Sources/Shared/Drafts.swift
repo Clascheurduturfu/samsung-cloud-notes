@@ -4,6 +4,10 @@ struct NoteDraft: Codable, Equatable {
     var title: String
     var body: String
     var commit: String
+    /// Formatting edits that leave the text unchanged (ticked checklist items): the full rich text they apply to.
+    var richText: String? = nil
+    var richRanges: [StyleRange]? = nil
+    var rich: RichText? { richText.map { RichText(text: $0, ranges: richRanges ?? []) } }
 }
 
 /// Only unsaved edits belong in Drafts. Clean cloud copies live in NoteCache.

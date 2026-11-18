@@ -40,6 +40,8 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private var loaded = mutableMapOf<String, CloudDocument>()
     private var generation = 0
     private var draftJob: Job? = null
+    private var autosaveJob: Job? = null
+    private var lastCheck = 0L
 
     val dirty: Boolean get() = document?.let { it.title != title || it.body != body } ?: false
     val visibleNotes: List<NoteRecord> get() = notes.filter { note ->
@@ -126,6 +128,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         try {
             val previous = notes.associate { it.id to it.commit }
             val index = client.loadIndex()
+            lastCheck = System.currentTimeMillis()
             val records = index.notes.map { it.copy() }
             val allowed = records.filter { !it.locked && !it.encrypted }.map { it.id }.toSet()
             loaded = loaded.filterKeys { it in allowed }.toMutableMap()
@@ -152,8 +155,8 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             notes = records; folders = index.folders
             withContext(Dispatchers.IO) { cache?.prune(records); cache?.saveIndex(CloudIndex(records, index.folders)) }
             selection?.let { id -> if (records.none { it.id == id && !it.locked && !it.encrypted }) { selection = null; document = null } }
-            // A local draft keeps its original cloud baseline for conflict checks.
-            selection?.let { if (!dirty) open(it) }
+            // A local draft keeps its original cloud baseline for conflict checks; an unchanged note stays as shown.
+            selection?.let { id -> if (!dirty && (document?.serverID != id || document?.commit != records.firstOrNull { it.id == id }?.commit)) open(id) }
             status = "${records.count { !it.trashed }} notes · Updated ${DateFormat.getTimeInstance(DateFormat.SHORT).format(Date())}"
             if (failures > 0) status += " · $failures notes could not be downloaded"
         } catch (cancelled: CancellationException) { throw cancelled }
@@ -163,6 +166,20 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
             else offlineStatus(failure)
         } catch (failure: Exception) { status = offlineStatus(failure) }
         finally { busy = false }
+    }
+    /**
+     * Checks Samsung Cloud for other devices' edits without disabling the editor: the index is read in the
+     * background, and a full refresh (which briefly disables editing) runs only when something changed.
+     */
+    fun refreshIfStale(intervalMs: Long) = viewModelScope.launch {
+        val client = client ?: return@launch
+        if (busy || dirty || System.currentTimeMillis() - lastCheck < intervalMs) return@launch
+        lastCheck = System.currentTimeMillis()
+        val index = try { client.loadIndex() } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { return@launch }
+        if (busy || dirty) return@launch
+        fun signature(notes: List<NoteRecord>, folders: List<FolderRecord>) =
+            (notes.map { "${it.id} ${it.commit} ${it.folder} ${it.trashed} ${it.locked}" } + folders.map { "${it.id} ${it.name} ${it.parent}" }).sorted()
+        if (signature(index.notes, index.folders) != signature(notes, folders)) refresh()
     }
     private fun offlineStatus(failure: Exception): String {
         if (notes.isEmpty()) error = failure.message
@@ -208,7 +225,7 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     fun discardLocalChanges() {
         val doc = document ?: return
         if (busy) return
-        draftJob?.cancel(); draftJob = null; generation++
+        draftJob?.cancel(); draftJob = null; autosaveJob?.cancel(); autosaveJob = null; generation++
         try {
             val current = if (dirty) LocalStore.Draft(title, body, doc.commit) else null
             LocalStore.discardDraft(doc.serverID, current)
@@ -231,12 +248,27 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
         newTitle?.let { title = it }; newBody?.let { body = it }
         draftJob?.cancel()
         draftJob = viewModelScope.launch { delay(600); preserveDraft() }
+        scheduleAutosave(AUTOSAVE_MS)
+    }
+
+    /** Saves the open note once it has gone a minute without changes. */
+    private fun scheduleAutosave(delayMs: Long) {
+        autosaveJob?.cancel(); autosaveJob = null
+        val id = document?.serverID ?: return
+        if (!dirty || !editable) return
+        val ticket = generation
+        autosaveJob = viewModelScope.launch {
+            delay(delayMs)
+            if (generation != ticket || document?.serverID != id || !dirty || !editable) return@launch
+            if (busy) scheduleAutosave(5_000) else save()
+        }
     }
 
     fun save() = viewModelScope.launch {
         val client = client ?: return@launch
         val doc = document ?: return@launch
         if (busy || !dirty || draftConflict) return@launch
+        autosaveJob?.cancel(); autosaveJob = null
         preserveDraft(); busy = true; status = "Saving to Samsung Cloud…"
         val id = doc.serverID; val savedTitle = title; val savedBody = body
         try {
@@ -330,6 +362,8 @@ class NotesViewModel(application: Application) : AndroidViewModel(application) {
     private fun ByteArray.startsWith(prefix: ByteArray) = size >= prefix.size && prefix.indices.all { this[it] == prefix[it] }
 
     companion object {
+        /** A note saves itself after this long without changes. */
+        const val AUTOSAVE_MS = 60_000L
         fun safeName(value: String): String {
             val result = value.map { if (it.isLetterOrDigit() || it in " -_.") it else '_' }.joinToString("").take(100)
             return result.trim().ifEmpty { "note" }

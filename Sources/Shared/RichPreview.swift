@@ -1,7 +1,7 @@
-import SwiftUI
+import Foundation
 
-/// Read-only rendering of Samsung rich text: character styles, colours,
-/// highlights, sizes, alignment, indentation, bullets, numbers and checklists.
+/// Display model of Samsung rich text: character styles, colours, highlights,
+/// sizes, alignment, indentation, bullets, numbers and checklists.
 /// Interpretation is best effort; the saved markup never depends on it.
 
 struct RichSegment: Equatable {
@@ -11,6 +11,7 @@ struct RichSegment: Equatable {
     var size: Double?
     var color: UInt32?
     var highlight: UInt32?
+    var link = false
 }
 
 enum RichMarker: Equatable { case plain, bullet, number(Int), checkbox(checked: Bool) }
@@ -21,16 +22,37 @@ struct RichParagraph: Equatable {
     var alignment = 0
     var indent = 0
     var marker = RichMarker.plain
+    var checked: Bool { if case .checkbox(true) = marker { return true }; return false }
 }
 
 extension RichText {
     /// Whether a formatted view shows anything a plain editor would not.
     var hasVisibleFormatting: Bool { !hasOnlyDefaultStyling }
 
-    func previewParagraphs() -> [RichParagraph] {
+    /// UTF-16 offset of each paragraph's first unit; paragraph k > 0 starts at its leading line break.
+    var paragraphStarts: [Int] {
         let units = Array(text.utf16)
         let newline = UInt16(UInt8(ascii: "\n"))
-        let starts = [0] + units.indices.filter { $0 > 0 && units[$0] == newline }
+        return [0] + units.indices.filter { $0 > 0 && units[$0] == newline }
+    }
+
+    /// Samsung bullet values are `type,state`: 2 is a checklist item (state true/false),
+    /// 4–7 and 9 are numbered styles, other types draw a bullet. Older payloads use names.
+    static func marker(forBullet value: String) -> RichMarker? {
+        let parts = value.split(separator: ",", omittingEmptySubsequences: false).map { $0.lowercased() }
+        guard let kind = parts.first else { return nil }
+        let done = parts.count > 1 && ["true", "1"].contains(parts.last!)
+        switch kind {
+        case "checker", "2": return .checkbox(checked: done)
+        case "", "0", "none": return nil
+        case "digit", "4", "5", "6", "7", "9": return .number(0)
+        default: return .bullet
+        }
+    }
+
+    func previewParagraphs() -> [RichParagraph] {
+        let units = Array(text.utf16)
+        let starts = paragraphStarts
         let spans = ranges.filter { $0.isSpan && !$0.isEmpty }
         var result: [RichParagraph] = []
         var numbering: [Int: Int] = [:]
@@ -43,11 +65,11 @@ extension RichText {
                 let descriptor = ([range.name.lowercased()] + parts).joined(separator: ",")
                 switch range.name {
                 case "alignment": paragraph.alignment = Int(range.value) ?? Int(range.flag) ?? 0
-                case "indentLevel": paragraph.indent = parts.first.flatMap { Int($0) } ?? 0
-                case _ where range.name == "bullet" || descriptor.contains("checker") || descriptor.contains("digit") || descriptor.contains("solidcircle"):
-                    if descriptor.contains("checker") { paragraph.marker = .checkbox(checked: parts.contains("true")) }
-                    else if descriptor.contains("digit") { paragraph.marker = .number(0) }
-                    else { paragraph.marker = .bullet }
+                case "indentLevel": paragraph.indent = max(0, min(8, Int(range.flag) ?? 0))
+                case "bullet": if let marker = Self.marker(forBullet: range.value) { paragraph.marker = marker }
+                case _ where descriptor.contains("checker"): paragraph.marker = .checkbox(checked: parts.contains("true"))
+                case _ where descriptor.contains("digit"): paragraph.marker = .number(0)
+                case _ where descriptor.contains("solidcircle"): paragraph.marker = .bullet
                 default: break
                 }
             }
@@ -71,6 +93,46 @@ extension RichText {
         }
         return result
     }
+
+    /// Checklist state per paragraph (nil for other paragraphs).
+    var checkStates: [Bool?] {
+        previewParagraphs().map { if case .checkbox(let done) = $0.marker { return done }; return nil }
+    }
+
+    /// The same text with one checklist item ticked or unticked. Only that paragraph
+    /// changes, even when its style range covers several paragraphs.
+    func togglingCheckbox(paragraph: Int, to newValue: Bool? = nil) -> RichText? {
+        let starts = paragraphStarts
+        guard paragraph >= 0, paragraph < starts.count else { return nil }
+        let start = starts[paragraph]
+        let end = paragraph + 1 < starts.count ? starts[paragraph + 1] : text.utf16.count
+        guard let index = ranges.lastIndex(where: { r in
+            r.isParagraph && !r.isEmpty && r.start <= start && start < r.end &&
+                (r.name == "bullet" ? Self.marker(forBullet: r.value).map { if case .checkbox = $0 { return true }; return false } ?? false
+                                    : r.value.lowercased().contains("checker"))
+        }) else { return nil }
+        let range = ranges[index]
+        var parts = range.value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        let current = parts.count > 1 && ["true", "1"].contains(parts.last!.lowercased())
+        let target = newValue ?? !current
+        if target == current { return self }
+        if parts.count > 1, let last = parts.last {
+            switch last {
+            case "true", "false": parts[parts.count - 1] = target ? "true" : "false"
+            case "True", "False": parts[parts.count - 1] = target ? "True" : "False"
+            case "TRUE", "FALSE": parts[parts.count - 1] = target ? "TRUE" : "FALSE"
+            default: parts[parts.count - 1] = target ? "1" : "0"
+            }
+        } else { parts.append(target ? "true" : "false") }
+        var pieces: [StyleRange] = []
+        if range.start < start { var before = range; before.end = start; pieces.append(before) }
+        var toggled = range; toggled.start = start; toggled.end = min(end, range.end); toggled.value = parts.joined(separator: ",")
+        pieces.append(toggled)
+        if end < range.end { var after = range; after.start = end; pieces.append(after) }
+        var updated = ranges
+        updated.replaceSubrange(index...index, with: pieces)
+        return RichText(text: text, ranges: updated)
+    }
 }
 
 extension RichSegment {
@@ -88,77 +150,13 @@ extension RichSegment {
         case "fontSize": size = Double(span.flag)
         case "foregroundColor": color = argb.flatMap { $0 >> 24 == 0 || $0 == Self.defaultColor ? nil : $0 }
         case "backgroundColor": highlight = argb.flatMap { $0 >> 24 == 0 ? nil : $0 }
-        case "hyperText": underline = true
+        case "hyperText": underline = true; link = true
         default: break
         }
     }
 }
 
-struct RichTextPreview: View {
-    let paragraphs: [RichParagraph]
-    let baseSize: CGFloat
-
-    init(rich: RichText, baseSize: CGFloat) {
-        paragraphs = rich.previewParagraphs()
-        self.baseSize = baseSize
-    }
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 3) {
-                ForEach(Array(paragraphs.enumerated()), id: \.offset) { _, paragraph in row(paragraph) }
-            }
-            .padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .textSelection(.enabled)
-        }
-    }
-
-    @ViewBuilder private func row(_ paragraph: RichParagraph) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            switch paragraph.marker {
-            case .plain: EmptyView()
-            case .bullet: Text("•")
-            case .number(let value): Text("\(value).").monospacedDigit()
-            case .checkbox(let checked): Image(systemName: checked ? "checkmark.square" : "square").foregroundStyle(.secondary)
-            }
-            Text(attributed(paragraph))
-                .multilineTextAlignment(paragraph.alignment == 2 ? .center : paragraph.alignment == 1 ? .trailing : .leading)
-                .frame(maxWidth: .infinity, alignment: paragraph.alignment == 2 ? .center : paragraph.alignment == 1 ? .trailing : .leading)
-        }
-        .font(.system(size: baseSize))
-        .padding(.leading, CGFloat(paragraph.indent) * 20)
-    }
-
-    private func attributed(_ paragraph: RichParagraph) -> AttributedString {
-        var checked = false
-        if case .checkbox(checked: true) = paragraph.marker { checked = true }
-        var result = AttributedString()
-        // An empty paragraph still needs a line's height.
-        for segment in paragraph.segments.isEmpty ? [RichSegment(text: " ")] : paragraph.segments {
-            var piece = AttributedString(segment.text)
-            var font = Font.system(size: segment.size.map { CGFloat($0) * baseSize / 15 } ?? baseSize)
-            if segment.bold { font = font.bold() }
-            if segment.italic { font = font.italic() }
-            piece.font = font
-            if let color = segment.color { piece.foregroundColor = Self.color(color) }
-            if let highlight = segment.highlight { piece.backgroundColor = Self.color(highlight) }
-            if segment.underline { piece.underlineStyle = Text.LineStyle.single }
-            // Samsung strikes through and greys out completed checklist items.
-            if segment.strikethrough || checked { piece.strikethroughStyle = Text.LineStyle.single }
-            if checked { piece.foregroundColor = Color.secondary }
-            result += piece
-        }
-        return result
-    }
-
-    private static func color(_ argb: UInt32) -> Color {
-        Color(.sRGB, red: Double((argb >> 16) & 0xff) / 255, green: Double((argb >> 8) & 0xff) / 255,
-              blue: Double(argb & 0xff) / 255, opacity: Double(argb >> 24) / 255)
-    }
-}
-
-/// Offline checks for the preview model.
+/// Offline checks for the display model.
 enum RichPreviewSelfTest {
     static func run() throws {
         let rich = try RichText.parse(RichTextSelfTest.encoded, orderData: RichTextSelfTest.order)
@@ -173,6 +171,19 @@ enum RichPreviewSelfTest {
         }
         guard try !RichText.parse(StyledText.encode("plain\ntext")).hasVisibleFormatting else {
             throw NotesError.message("Plain text was reported as formatted.")
+        }
+        // Ticking a checklist item changes only its state, and survives re-encoding.
+        guard let ticked = rich.togglingCheckbox(paragraph: 1), ticked.checkStates == [nil, true, nil, nil],
+              let reparsed = try? RichText.parse(ticked.encode(), orderData: ticked.spanOrderData()),
+              reparsed.checkStates == [nil, true, nil, nil], reparsed.text == rich.text,
+              rich.togglingCheckbox(paragraph: 2) == nil,
+              ticked.togglingCheckbox(paragraph: 1)?.checkStates == [nil, false, nil, nil] else {
+            throw NotesError.message("Checklist toggle mismatch.")
+        }
+        // Real Samsung bullet values.
+        guard RichText.marker(forBullet: "2,true") == .checkbox(checked: true), RichText.marker(forBullet: "2,false") == .checkbox(checked: false),
+              RichText.marker(forBullet: "4,1") == .number(0), RichText.marker(forBullet: "8,0") == .bullet else {
+            throw NotesError.message("Bullet type mapping mismatch.")
         }
     }
 }

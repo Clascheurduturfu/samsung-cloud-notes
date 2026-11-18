@@ -177,7 +177,7 @@ struct NotesUpdatesView: View {
             }
             Toggle("Check at launch, at most once a day",isOn:$updates.automaticallyCheck).disabled(updates.installing)
             Link("Open GitHub Releases",destination:updates.config.releasesURL)
-            Text(updates.channelMessage).font(.caption).foregroundStyle(.secondary)
-        }.padding(20).frame(width:440)
+            Text(updates.channelMessage).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal:false,vertical:true)
+        }.frame(width:400,alignment:.leading).padding(20)  // Fixed and leading: a longer channel line no longer shifts the panel.
     }
 }

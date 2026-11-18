@@ -127,6 +127,77 @@ class RichTextTest {
         assertEquals("a🚀🚀b", RichText.parse(edited.encode()).text)
     }
 
+    /** Markers around tables and pictures follow the order Samsung's own apps write. */
+    @Test fun markersFollowSamsungOrderAroundObjects() {
+        val r = RichText.parse(payload(
+            "'sectionData/sectionData'='5' 'span/fontSize'='1,15.0' 'paragraph/parsingState'='true' 'objectSpan/objectSpan'='t,3,2'", "￼",
+            "'objectSpan/objectSpan'", "x",
+            "'paragraph/parsingState' 'paragraph/parsingState'='true'", "\n",
+            "'span/bold'='1,false' 'objectSpan/objectSpan'='p,0,0'", "￼",
+            "'objectSpan/objectSpan' 'span/bold'", "y",
+            "'span/fontSize' 'sectionData/sectionData' 'paragraph/parsingState'", "",
+        ))
+        val written = String(base64Decode(r.encode())!!)
+        val markers = written.split("<?a ").drop(1).map { it.substringBefore("?>") }
+        assertEquals(listOf(
+            "'span/fontSize'='1,15.0' 'objectSpan/objectSpan'='t,3,2' 'paragraph/parsingState'='true' 'sectionData/sectionData'='5'",
+            "'objectSpan/objectSpan'",
+            "'paragraph/parsingState' 'paragraph/parsingState'='true'",
+            "'span/bold'='1,false' 'objectSpan/objectSpan'='p,0,0'",
+            "'span/bold' 'objectSpan/objectSpan'",
+            "'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'",
+        ), markers)
+        assertEquals(simple(r), simple(RichText.parse(r.encode())))
+    }
+
+    /** An anchor covers exactly its U+FFFC: typed text never joins it and deleting the character drops it. */
+    @Test fun objectAnchorsCoverOnlyTheirCharacter() {
+        val anchor = RichText.OBJECT_SPAN
+        val r = RichText.parse(payload(
+            "'objectSpan/objectSpan'='t,3,2'", "\uFFFC", "'objectSpan/objectSpan'", "x\n",
+            "'objectSpan/objectSpan'='p,0,0'", "\uFFFC", "'objectSpan/objectSpan'", "y",
+        ))
+        assertEquals(listOf(0 to 1, 3 to 4), find(r.withText("\uFFFCx\n\uFFFCzy"), anchor))
+        assertEquals(listOf(1 to 2, 4 to 5), find(r.withText("z\uFFFCx\n\uFFFCy"), anchor))
+        assertEquals(listOf(0 to 1), find(r.withText("\uFFFCx\ny"), anchor))
+        val stretched = RichText.parse(payload("'objectSpan/objectSpan'='p,0,0'", "\uFFFC\nback", "'objectSpan/objectSpan'", "")).normalizedForUpload()
+        assertEquals(listOf(0 to 1), find(stretched, anchor))
+        val orphan = RichText.parse(payload("'objectSpan/objectSpan'='p,0,0'", "\nback", "'objectSpan/objectSpan'", "")).normalizedForUpload()
+        assertTrue(find(orphan, anchor).isEmpty())
+    }
+
+    /** A note with one picture, laid out as Samsung Notes for Windows writes it. */
+    private fun pictureDocument(): CloudDocument {
+        val body = payload("", "a", "'objectSpan/objectSpan'='p,0,0'", "\uFFFC", "'objectSpan/objectSpan'", "b")
+        val xml = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\"><noteTree ver=\"4000\"><contentFileList><contentFile h=\"x\" id=\"f1\" t=\"0\"/></contentFileList><floatingObjectList><object h=\"x\" id=\"p\" t=\"0\"/></floatingObjectList><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><contentFileList><contentFile id=\"f1\" refCount=\"1\"><fileHash>f1</fileHash></contentFile></contentFileList><attributes><title><object/></title></attributes><floatingObjectList><object id=\"p\" type=\"image\" layoutType=\"3\"><fillEffect imageId=\"f1\"/></object></floatingObjectList><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\"><zeroLengthSpanList><zeroLengthSpan val=\"${record("3,1,1,1,15")}\"/></zeroLengthSpanList><text>$body</text></object></bodyText></noteResource><commitId>c</commitId><downloadUrls/></CompareNoteView>"
+        return CloudDocument("note", xml.toByteArray()).also {
+            assertEquals("a\uFFFCb", it.body)
+            assertNull(it.editIssue)
+        }
+    }
+    private fun ids(list: XmlElement?, entry: String) = list?.elements(entry)?.map { it.attr("id") } ?: emptyList()
+
+    @Test fun savingNeverLeavesAnEmptySpanList() {
+        val root = XmlDocument(pictureDocument().uploadXml("", "a\uFFFCbc")).rootElement()!!
+        val body = root.first("bodyText")!!.first("object")!!
+        // Samsung's parsers fail on an empty list (Windows: FAIL_PARSE_XML), so none is left behind.
+        assertTrue(body.elements("zeroLengthSpanList").isEmpty())
+        assertTrue(body.elements("spanOrderDataList").isEmpty())
+        assertEquals(listOf("p"), ids(root.first("floatingObjectList"), "object"))
+        assertEquals(listOf("f1"), ids(root.first("noteTree")!!.first("contentFileList"), "contentFile"))
+    }
+
+    @Test fun deletingAPictureRemovesItAndItsFile() {
+        val root = XmlDocument(pictureDocument().uploadXml("", "ab")).rootElement()!!
+        val tree = root.first("noteTree")!!
+        assertNotNull(root.first("floatingObjectList"))
+        assertTrue(ids(root.first("floatingObjectList"), "object").isEmpty())
+        assertNull(tree.first("floatingObjectList"))
+        assertNull(tree.first("contentFileList"))
+        assertTrue(ids(root.first("contentFileList"), "contentFile").isEmpty())
+        assertNotNull(tree.first("bodyText"))
+    }
+
     /** Characters that survive an edit keep exactly the span styles they had. */
     @Test fun randomEditsPreserveUntouchedStyling() {
         val random = Random(1234)
@@ -182,6 +253,7 @@ class RichTextTest {
         val doc = CloudDocument("note", xml.toByteArray())
         assertNotNull(doc.richBody)
         assertNull(doc.editIssue)
+        assertTrue("empty span list not flagged for repair", doc.bodyNeedsNativeRepair)
         val uploaded = XmlDocument(doc.uploadXml("", "Title line\nCheck\nBold words\nEnd")).rootElement()!!
         val obj = uploaded.first("bodyText")!!.first("object")!!
         val values = obj.first("spanOrderDataList")!!.elements("spanOrderData").map { it.attr("val") }
@@ -218,16 +290,29 @@ class RichTextTest {
             val original = obj.first("spanOrderDataList")?.elements("spanOrderData")?.map { it.attr("val") } ?: emptyList()
             val again = RichText.parse(rich.encode(), rich.spanOrderData())
             assertEquals(file.name, simple(rich), simple(again))
+            // Each marker closes, then opens, spans before object anchors before paragraph before
+            // section attributes, as Samsung's apps write them (zero-length entries lead the opens).
+            fun kind(key: String) = listOf("span/", "objectSpan/", "paragraph/", "sectionData/").indexOfFirst { key.startsWith(it) }.let { if (it < 0) 4 else it }
+            for (marker in String(base64Decode(rich.encode())!!).split("<?a ").drop(1).map { it.substringBefore("?>") }) {
+                val tokens = Regex("'([^']*)'(?:='[^']*')?").findAll(marker).map { it.groupValues[1] to it.value.contains("='") }.toList()
+                val closes = tokens.takeWhile { !it.second }.map { kind(it.first) }
+                val opens = tokens.drop(closes.size).filterIndexed { i, t -> t.second && tokens.drop(closes.size).getOrNull(i + 1) != (t.first to false) }.map { kind(it.first) }
+                assertEquals("${file.name}: close order in <?a $marker?>", closes.sorted(), closes)
+                assertEquals("${file.name}: open order in <?a $marker?>", opens.sorted(), opens)
+            }
             for (range in rich.ranges.filter { it.isParagraph && it.end > it.start }) {
                 assertTrue("${file.name}: ${range.key} starts mid-paragraph", range.start == 0 || rich.text[range.start] == '\n')
                 assertTrue("${file.name}: ${range.key} ends mid-paragraph", range.end == rich.text.length || rich.text[range.end] == '\n')
             }
-            // In consistent documents every spanOrderData record belongs to exactly one span
-            // and the order is reproduced. Pre-1.1.1 uploads left stale records behind.
+            // In consistent documents every spanOrderData record of a non-empty span belongs to
+            // exactly one span and the order is reproduced (zero-length records, kept by native apps
+            // in zeroLengthSpanList, are not written back). Pre-1.1.1 uploads left stale records
+            // behind; Windows Samsung Notes itself writes the values that flag a native repair.
             if (!doc.bodyNeedsNativeRepair) {
-                assertEquals(file.name, original.size, rich.ranges.count { it.typeId != null })
-                assertEquals(file.name, original, rich.spanOrderData())
-            } else assertTrue(file.name, rich.hasOnlyDefaultStyling)
+                val ranged = original.filter { String(base64Decode(it)!!).split(",").let { r -> r.size < 3 || r[1] != r[2] } }
+                assertEquals(file.name, ranged.size, rich.ranges.count { it.typeId != null && it.end > it.start })
+                assertEquals(file.name, ranged, rich.spanOrderData())
+            }
             val edited = rich.withText(rich.text.substring(0, rich.text.length / 2) + "\nInserted line" + rich.text.substring(rich.text.length / 2))
             val reparsed = RichText.parse(edited.encode(), edited.normalizedForUpload().spanOrderData())
             assertEquals(file.name, edited.text, reparsed.text)

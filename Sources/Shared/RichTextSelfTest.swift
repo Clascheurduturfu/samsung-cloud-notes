@@ -88,6 +88,39 @@ enum RichTextSelfTest {
         try check(emoji.ranges.allSatisfy { !UTF16.isTrailSurrogate(units[$0.start]) && ($0.end == units.count || !UTF16.isTrailSurrogate(units[$0.end])) }, "surrogate boundary")
         try check((try RichText.parse(emoji.encode())).text == "a🚀🚀b", "surrogate text")
 
+        // Markers come out in Samsung's order (spans, object anchor, paragraph, section) when
+        // opening and closing, as Samsung's own apps write them.
+        let objects = try RichText.parse(payload(
+            "'sectionData/sectionData'='5' 'span/fontSize'='1,15.0' 'paragraph/parsingState'='true' 'objectSpan/objectSpan'='t,3,2'", "\u{FFFC}",
+            "'objectSpan/objectSpan'", "x",
+            "'paragraph/parsingState' 'paragraph/parsingState'='true'", "\n",
+            "'span/bold'='1,false' 'objectSpan/objectSpan'='p,0,0'", "\u{FFFC}",
+            "'objectSpan/objectSpan' 'span/bold'", "y",
+            "'span/fontSize' 'sectionData/sectionData' 'paragraph/parsingState'", ""))
+        let written = Data(base64Encoded: objects.encode()).flatMap { String(data: $0, encoding: .utf8) } ?? ""
+        let markers = written.components(separatedBy: "<?a ").dropFirst().map { $0.components(separatedBy: "?>")[0] }
+        try check(markers == [
+            "'span/fontSize'='1,15.0' 'objectSpan/objectSpan'='t,3,2' 'paragraph/parsingState'='true' 'sectionData/sectionData'='5'",
+            "'objectSpan/objectSpan'",
+            "'paragraph/parsingState' 'paragraph/parsingState'='true'",
+            "'span/bold'='1,false' 'objectSpan/objectSpan'='p,0,0'",
+            "'span/bold' 'objectSpan/objectSpan'",
+            "'span/fontSize' 'paragraph/parsingState' 'sectionData/sectionData'",
+        ], "native marker order: \(markers)")
+        try check(simple(try RichText.parse(objects.encode())) == simple(objects), "object anchors re-encoding")
+
+        // An anchor covers exactly its U+FFFC: text typed beside a picture never joins it,
+        // deleting the character drops the anchor, and stretched anchors are repaired.
+        let anchor = "objectSpan/objectSpan"
+        try check(find(objects.withText("\u{FFFC}x\n\u{FFFC}zy"), anchor) == [[0, 1], [3, 4]], "typing after a picture")
+        try check(find(objects.withText("z\u{FFFC}x\n\u{FFFC}y"), anchor) == [[1, 2], [4, 5]], "typing before a picture")
+        let unpictured = objects.withText("\u{FFFC}x\ny")
+        try check(find(unpictured, anchor) == [[0, 1]] && SamsungAttachments.anchoredIDs(unpictured) == ["t"], "deleting a picture")
+        let stretched = try RichText.parse(payload("'objectSpan/objectSpan'='p,0,0'", "\u{FFFC}\nback", "'objectSpan/objectSpan'", "")).normalizedForUpload()
+        try check(find(stretched, anchor) == [[0, 1]], "stretched anchor repair")
+        let orphan = try RichText.parse(payload("'objectSpan/objectSpan'='p,0,0'", "\nback", "'objectSpan/objectSpan'", "")).normalizedForUpload()
+        try check(find(orphan, anchor).isEmpty && SamsungAttachments.anchoredIDs(orphan).isEmpty, "anchor without its picture")
+
         try randomEdits(r)
         try cloudDocument()
     }
@@ -135,6 +168,7 @@ enum RichTextSelfTest {
         }
         let doc = try CloudDocument(serverID: "note", data: Data(wrap(encoded, "<spanOrderDataList>\(orderXML)</spanOrderDataList>").utf8))
         try check(doc.richBody != nil && doc.editIssue == nil, "formatted note not editable")
+        try check(doc.bodyNeedsNativeRepair, "empty span list not flagged for repair")
         let upload = try XMLDocument(data: doc.uploadXML(title: "", body: "Title line\nCheck\nBold words\nEnd"))
         guard let object = upload.rootElement()?.first("bodyText")?.first("object") else { throw fail("upload lost the body object") }
         let values = object.first("spanOrderDataList")?.elements(forName: "spanOrderData").map { $0.attr("val") } ?? []
@@ -146,5 +180,30 @@ enum RichTextSelfTest {
         let readOnly = try CloudDocument(serverID: "note", data: Data(wrap(bad, "").utf8))
         try check(readOnly.body == "Text" && readOnly.editIssue != nil, "unsupported markup not read-only")
         try check((try? readOnly.uploadXML(title: "", body: "Changed")) == nil, "unsupported markup was rewritten")
+        try pictureDocument()
+    }
+
+    /// A note with one picture, laid out as Samsung Notes for Windows writes it.
+    private static func pictureDocument() throws {
+        func document() throws -> CloudDocument {
+            let body = payload("", "a", "'objectSpan/objectSpan'='p,0,0'", "\u{FFFC}", "'objectSpan/objectSpan'", "b")
+            let xml = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\"><noteTree ver=\"4000\"><contentFileList><contentFile h=\"x\" id=\"f1\" t=\"0\"/></contentFileList><floatingObjectList><object h=\"x\" id=\"p\" t=\"0\"/></floatingObjectList><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><contentFileList><contentFile id=\"f1\" refCount=\"1\"><fileHash>f1</fileHash></contentFile></contentFileList><attributes><title><object/></title></attributes><floatingObjectList><object id=\"p\" type=\"image\" layoutType=\"3\"><fillEffect imageId=\"f1\"/></object></floatingObjectList><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\"><zeroLengthSpanList><zeroLengthSpan val=\"\(record("3,1,1,1,15"))\"/></zeroLengthSpanList><text>\(body)</text></object></bodyText></noteResource><commitId>c</commitId><downloadUrls/></CompareNoteView>"
+            let doc = try CloudDocument(serverID: "note", data: Data(xml.utf8))
+            try check(doc.body == "a\u{FFFC}b" && doc.editIssue == nil, "picture note not editable")
+            return doc
+        }
+        func names(_ list: XMLElement?, _ entry: String) -> [String] { list?.elements(forName: entry).map { $0.attr("id") } ?? [] }
+
+        let kept = try XMLDocument(data: try document().uploadXML(title: "", body: "a\u{FFFC}bc"))
+        guard let keptRoot = kept.rootElement(), let keptBody = keptRoot.first("bodyText")?.first("object") else { throw fail("upload lost the body") }
+        try check(names(keptRoot.first("floatingObjectList"), "object") == ["p"] && names(keptRoot.first("noteTree")?.first("contentFileList"), "contentFile") == ["f1"], "picture kept")
+        // Samsung's parsers fail on an empty list (Windows: FAIL_PARSE_XML), so none is left behind.
+        try check(keptBody.elements(forName: "zeroLengthSpanList").isEmpty && keptBody.elements(forName: "spanOrderDataList").isEmpty, "empty span lists written")
+
+        let gone = try XMLDocument(data: try document().uploadXML(title: "", body: "ab"))
+        guard let root = gone.rootElement(), let tree = root.first("noteTree") else { throw fail("upload lost the note tree") }
+        try check(root.first("floatingObjectList") != nil && names(root.first("floatingObjectList"), "object").isEmpty, "deleted picture kept in the note")
+        try check(tree.first("floatingObjectList") == nil && tree.first("contentFileList") == nil, "deleted picture kept in the hash tree")
+        try check(names(root.first("contentFileList"), "contentFile").isEmpty && tree.first("bodyText") != nil, "deleted picture file kept")
     }
 }

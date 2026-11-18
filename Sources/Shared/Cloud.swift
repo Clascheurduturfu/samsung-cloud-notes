@@ -5,7 +5,7 @@ import FoundationXML
 import CryptoKit
 import Security
 
-let appVersion = "1.2.0-beta.1"
+let appVersion = "1.2.0-rc.1"
 let appShortVersion = appVersion.components(separatedBy: "-")[0]
 var transientSession: AccountSession?
 
@@ -252,6 +252,10 @@ final class CloudDocument {
         guard let object = bodyObject else { return false }
         if (Int64(object.attr("timeStamp")) ?? 0) > Int64(Int32.max) { return true }
         if (Int64(resource.first("attributes")?.attr("editTime") ?? "") ?? 0) > Int64(Int32.max) { return true }
+        // Up to beta.6 a save could leave an empty span list, which Samsung's parsers cannot read.
+        for (list, entry) in [("zeroLengthSpanList", "zeroLengthSpan"), ("spanOrderDataList", "spanOrderData")] {
+            if object.elements(forName: list).contains(where: { $0.elements(forName: entry).isEmpty }) { return true }
+        }
         let raw = object.value("text")
         if let data = Data(base64Encoded: raw.filter { !$0.isWhitespace }),
            let decoded = String(data: data, encoding: .utf8),
@@ -274,7 +278,7 @@ final class CloudDocument {
     var needsNativeRepair: Bool { bodyNeedsNativeRepair || titleNeedsNativeRepair }
     /// Shown instead of editing when saving could damage the note.
     var editIssue: String? { textIssue ?? (richBody == nil && !body.isEmpty ? formattingIssue : nil) }
-    func uploadXML(title newTitle: String, body newBody: String, now: Date = Date()) throws -> Data {
+    func uploadXML(title newTitle: String, body newBody: String, rich override: RichText? = nil, now: Date = Date()) throws -> Data {
         if let textIssue { throw NotesError.message(textIssue) }
         if resource.attr("isEncrypted") == "true" || resource.attr("isLocked") == "true" {
             throw NotesError.message("Locked or encrypted notes cannot be edited by this version.")
@@ -286,7 +290,7 @@ final class CloudDocument {
         let editMicros = max(Int64(now.timeIntervalSince1970 * 1_000_000), (previousSync + 1) * 1000, previousEdit + 1)
         let micros = String(editMicros)
         let millis = String(editMicros / 1000)
-        if body != newBody || bodyNeedsNativeRepair {
+        if body != newBody || bodyNeedsNativeRepair || override != nil {
             guard let object = bodyObject,
                   let tree = resource.first("noteTree")?.first("bodyText") else {
                 throw NotesError.message("This note has no supported typed-text body. Its drawings are retained in the original document.")
@@ -301,17 +305,23 @@ final class CloudDocument {
             let clean = StyledText.normalized(newBody)
             let encoded: String
             let orderData: [String]
+            var anchoredAfter: Set<String> = []
             // Repairs of plain notes written by older clients keep the verified 1.1.1 encoding.
-            let legacyRepair = bodyNeedsNativeRepair && richBody?.hasOnlyDefaultStyling == true
-            if let rich = richBody, !rich.text.isEmpty, !clean.isEmpty, !legacyRepair {
+            let legacyRepair = override == nil && bodyNeedsNativeRepair && richBody?.hasOnlyDefaultStyling == true
+            if let rich = override ?? richBody, !rich.text.isEmpty, !clean.isEmpty, !legacyRepair {
                 // Carry every span and paragraph style over to the edited text.
                 let updated = rich.withText(clean).normalizedForUpload()
                 encoded = updated.encode(); orderData = try updated.spanOrderData()
+                anchoredAfter = SamsungAttachments.anchoredIDs(updated)
             } else {
                 if richBody == nil && !body.isEmpty { throw NotesError.message(formattingIssue ?? "This note's formatting cannot be preserved by this version.") }
                 encoded = StyledText.encode(newBody); orderData = StyledText.spanOrderData(for: newBody)
             }
             text.stringValue = encoded
+            // Samsung's parsers skip to the next tag before checking for the end of a list,
+            // so an empty list makes them read the following <text> as an entry and fail
+            // (Windows: FAIL_PARSE_XML "out of range, parameter i"). Native clients omit
+            // empty lists; so must we. Zero-length (caret-only) styles are not carried over.
             if let existingList = object.first("spanOrderDataList") {
                 for child in existingList.elements(forName: "spanOrderData") { child.detach() }
                 for val in orderData {
@@ -319,6 +329,7 @@ final class CloudDocument {
                     item.set("val", val)
                     existingList.addChild(item)
                 }
+                if orderData.isEmpty { existingList.detach() }
             } else if !orderData.isEmpty {
                 let list = XMLElement(name: "spanOrderDataList")
                 for val in orderData {
@@ -328,9 +339,9 @@ final class CloudDocument {
                 }
                 object.addChild(list)
             }
-            if let zeroList = object.first("zeroLengthSpanList") {
-                for child in zeroList.elements(forName: "zeroLengthSpan") { child.detach() }
-            }
+            for child in object.elements(forName: "zeroLengthSpanList") { child.detach() }
+            // A picture or table whose character was deleted is deleted with it.
+            removeObjects((richBody.map(SamsungAttachments.anchoredIDs) ?? []).subtracting(anchoredAfter))
             updateObject(object, tree: tree, micros: micros)
         }
         if title != newTitle || titleNeedsNativeRepair {
@@ -358,14 +369,36 @@ final class CloudDocument {
         }
         return resource.bytes
     }
-    func uploadTextDelta(title: String, body: String, now: Date = Date()) throws -> Data {
-        let xml = try XMLDocument(data: uploadXML(title:title,body:body,now:now), options:[.nodeLoadExternalEntitiesNever])
+    func uploadTextDelta(title: String, body: String, rich: RichText? = nil, now: Date = Date()) throws -> Data {
+        let xml = try XMLDocument(data: uploadXML(title:title,body:body,rich:rich,now:now), options:[.nodeLoadExternalEntitiesNever])
         guard let root = xml.rootElement() else { throw NotesError.message("Could not prepare the note update.") }
         // The unchanged page/file objects already exist on the server. Sending
         // them again declares binary multipart uploads (including strokeResource).
         // Keep their complete hash tree so Samsung preserves the existing objects.
         for name in ["pageList", "contentFileList"] { for child in root.elements(forName:name) { child.detach() } }
         return root.bytes
+    }
+    /// Drops the named inline objects from the note and its hash tree, with picture
+    /// files no remaining object uses. Native clients leave empty lists out of the tree.
+    private func removeObjects(_ ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        let tree = resource.first("noteTree")
+        var removed = ""
+        for list in [resource.first("floatingObjectList"), tree?.first("floatingObjectList")] {
+            for object in list?.elements(forName: "object") ?? [] where ids.contains(object.attr("id")) {
+                removed += object.xmlString(options: []); object.detach()
+            }
+        }
+        let remaining = ["floatingObjectList", "pageList", "attributes"].compactMap { resource.first($0)?.xmlString(options: []) }.joined()
+        for list in [tree?.first("contentFileList"), resource.first("contentFileList")] {
+            for file in list?.elements(forName: "contentFile") ?? [] {
+                let id = file.attr("id")
+                if !id.isEmpty, removed.contains(id), !remaining.contains(id) { file.detach() }
+            }
+        }
+        for (name, entry) in [("floatingObjectList", "object"), ("contentFileList", "contentFile")] {
+            if let list = tree?.first(name), list.elements(forName: entry).isEmpty { list.detach() }
+        }
     }
     private func updateObject(_ object: XMLElement, tree: XMLElement, micros: String) {
         object.set("modifiedTime", micros); object.set("timeStamp", "0")
@@ -469,12 +502,12 @@ final class CloudClient {
         guard let value = try XMLDocument(data: data, options: [.nodeLoadExternalEntitiesNever]).rootElement()?.attr("commitId"), !value.isEmpty else { throw NotesError.message("Samsung omitted the current revision.") }
         return value
     }
-    func save(_ document: CloudDocument, title: String, body: String) async throws -> CloudDocument {
+    func save(_ document: CloudDocument, title: String, body: String, rich: RichText? = nil) async throws -> CloudDocument {
         let remoteCommit = try await currentCommit(document.serverID)
         guard remoteCommit == document.commit else { throw NotesError.message("This note changed on another device. Your draft is saved locally; reload the cloud copy before saving again.") }
         try LocalStore.backup(document)
         let previousSync = Int64(document.resource.attr("syncModifiedTime")) ?? 0
-        let xml = try document.uploadTextDelta(title: title, body: body)
+        let xml = try document.uploadTextDelta(title: title, body: body, rich: rich)
         let boundary = "SamsungNotesMac-" + UUID().uuidString
         var payload = Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"noteResource\"\r\nContent-Type: application/xml\r\n\r\n".utf8)
         payload.append(xml); payload.append(Data("\r\n--\(boundary)--\r\n".utf8))

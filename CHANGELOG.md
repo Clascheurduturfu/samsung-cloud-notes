@@ -1,5 +1,46 @@
 # Changelog
 
+## 1.2.0-rc.1 — 2026-11-18
+
+First release candidate for 1.2.0, for **macOS, iOS and the standalone Android client**. It includes everything from the 1.2.0 betas below.
+
+- **Stay in the menu bar (Mac).** Turn on **Stay in menu bar when closed** in the Sync with Apple Notes menu or the app menu. Closing the window then removes the Dock icon, and Samsung Cloud Notes keeps syncing Apple Notes and Samsung Cloud from the menu bar, so Apple Notes can be used on its own.
+  - The menu bar item reopens the window and can switch automatic Apple Notes sync on or off, check for changes or quit.
+  - Opening the app again from Finder, Launchpad or Spotlight also brings the window and Dock icon back.
+- **Sync keeps running with the window closed (Mac).** Apple Notes sync and the Samsung Cloud checks belong to the app now, not to its window. While Apple Notes is kept in sync, other devices' changes are checked every minute, in the background too.
+- **The update settings panel no longer shifts** when switching between Stable and Preview.
+
+## 1.2.0-beta.8 (automatic sync) — 2026-11-18
+
+Preview release for **macOS, iOS and the standalone Android client**.
+
+- **Edits save themselves.** A note saves to Samsung Cloud after a minute without changes, on every platform. This leaves less time for the same note to be edited on another device.
+- **Other devices' edits arrive without Refresh.** The app checks Samsung Cloud every minute while open, every three minutes in the background on the Mac, and when it comes back to the front.
+  - The check reads only the note list. The editor is not locked unless something changed.
+  - A refresh no longer reloads the open note when its cloud copy is unchanged.
+- **Apple Notes stays in sync automatically (Mac)**, once **Sync with Apple Notes** has run once. The toolbar menu has a switch to turn this off.
+  - **Edits made in Notes appear here live**, read from Notes' database while Notes keeps running. They save to Samsung after a minute without changes. A newer edit replaces the draft the previous one became; text typed here is never overwritten.
+  - **Samsung changes are written into Notes as soon as Notes has been idle for a few seconds.** Writing still needs Notes closed for a moment. It reopens behind the current app, or in front if it was in front, and only if it was running.
+  - Notes is closed only when something must actually be written. An Apple edit saved back to Samsung no longer rewrites the Apple copy.
+  - **Typing a note in this app closes Notes**, so one note is never edited in two places. Notes comes back in the background once the edit is saved and written.
+- Pull requests #2 (nested folders) and #3 (sticky-memo previews) are merged.
+
+## 1.2.0-beta.7 (pictures and tables sync) — 2026-11-18
+
+Preview release for **macOS, iOS and the standalone Android client**.
+
+- **Notes with pictures or tables sync to Samsung Notes for Windows again.**
+  - Samsung's apps write `<zeroLengthSpanList>` (caret-only styles) around pictures and tables. Since 1.1.1 a save emptied that list but kept the element.
+  - Samsung's list reader moves to the next tag before checking for the end of the list. An empty list therefore made it read `<text>` as an entry, and Windows rejected the note (`FAIL_PARSE_XML`, "argument out of range: i").
+  - Empty `zeroLengthSpanList`/`spanOrderDataList` elements are now removed, as native apps do. Notes saved by earlier betas are flagged for repair and fixed on their next save.
+- **Deleting a picture or table deletes it.**
+  - The object is removed from the note and its hash tree, along with its picture file when nothing else uses it.
+  - Previously the attachment stayed behind with an anchor pointing at plain text.
+- **Picture anchors stay on their picture.** Text typed right after a picture or table no longer joins its anchor, and anchors stretched by earlier betas are repaired on save.
+- Includes contributed pull requests, for testing:
+  - **Nested folders** (#2): subfolders and their notes are listed, and folder trees collapse on the Mac.
+  - **Sticky-memo previews** (#3): handwriting preview and a save button for attached `.sdocx` notes on the Mac.
+
 ## 1.2.0-beta.1 (formatting preservation) — 2026-11-16
 
 Preview release for **macOS, iOS and the standalone Android client**. Not yet verified against a native Samsung Notes downsync; see [validation](docs/validation.md).

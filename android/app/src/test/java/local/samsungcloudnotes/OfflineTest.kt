@@ -110,7 +110,8 @@ class OfflineTest {
         val updatedOrders = updatedBodyObj.first("spanOrderDataList")!!.elements("spanOrderData").map {
             String(base64Decode(it.attr("val"))!!)
         }
-        val updatedZeros = updatedBodyObj.first("zeroLengthSpanList")!!.elements("zeroLengthSpan")
+        // Samsung parsers crash on an empty list element, so it must be removed, not emptied.
+        val updatedZeros = updatedBodyObj.elements("zeroLengthSpanList")
         assertEquals("retain", resource.attr("unknownField"))
         assertEquals("0", resource.first("attributes")!!.attr("editTime"))
         assertEquals("0", updatedBodyObj.attr("timeStamp"))

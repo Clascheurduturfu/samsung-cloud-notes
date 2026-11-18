@@ -81,13 +81,16 @@ extension NotesModel {
 }
 
 struct NotesView: View {
-    @StateObject var model = NotesModel()
+    // Owned by the app delegate, so sync keeps running with the window closed.
+    @ObservedObject var model: NotesModel
+    @ObservedObject var live: AppleNotesLive
+    @AppStorage(MenuBarMode.key, store: MenuBarMode.store) private var keepInMenuBar = false
     @ObservedObject var updates = NotesAppUpdates.shared
     @State var showingUpdates = false
     @State var importing = false
     @State var showDrawing = false
-    @State var showFormatted = true
     @State private var collapsedFolders: Set<String> = []
+    @State var confirmAppleSync = false
     var body: some View {
         VStack(spacing: 0) {
         NavigationSplitView {
@@ -139,27 +142,18 @@ struct NotesView: View {
                     TextField("Title", text: $model.title).font(.title2).textFieldStyle(.plain).padding()
                         .disabled(!model.editable || model.busy)
                     Divider()
-                    let formatted = document.richBody.flatMap { $0.hasVisibleFormatting ? $0 : nil }
-                    if !document.drawingPages.isEmpty || formatted != nil {
+                    if !document.drawingPages.isEmpty {
                         HStack {
-                            if !document.drawingPages.isEmpty {
-                                Picker("View", selection: $showDrawing) { Text("Text").tag(false); Text("Drawing").tag(true) }.pickerStyle(.segmented).frame(width: 190)
-                            }
-                            if formatted != nil && !showDrawing {
-                                Picker("Text view", selection: $showFormatted) { Text("Formatted").tag(true); Text("Edit text").tag(false) }
-                                    .pickerStyle(.segmented).labelsHidden().frame(width: 190)
-                                    .help("Formatting is kept when you edit the text. The formatted view is a preview.")
-                            }
+                            Picker("View", selection: $showDrawing) { Text("Text").tag(false); Text("Drawing").tag(true) }.pickerStyle(.segmented).frame(width: 190)
                             Spacer()
-                            if !document.drawingPages.isEmpty { Button("Open drawing PDF") { model.showDrawing() } }
+                            Button("Open drawing PDF") { model.showDrawing() }
                         }.padding(10)
                     }
                     if showDrawing && !document.drawingPages.isEmpty { DrawingPreview(pages: document.drawingPages) }
-                    else if showFormatted, let formatted {
-                        RichTextPreview(rich: formatted.withText(StyledText.normalized(model.body)), baseSize: 15)
-                    } else {
-                        TextEditor(text: $model.body).font(.system(size: 15)).padding(10)
-                            .disabled(!model.editable || model.busy || document.bodyObject == nil)
+                    else {
+                        RichTextEditor(text: $model.body, rich: model.displayRich,
+                                       editable: model.editable && !model.busy && document.bodyObject != nil, baseSize: 15, objects: model.objects) { model.toggleCheckbox($0) }
+                            .id(document.serverID)
                     }
                     if !document.assets.filter({ !$0.isInternal }).isEmpty {
                         Divider()
@@ -186,12 +180,12 @@ struct NotesView: View {
                     }
                     Divider()
                     HStack {
-                        Text(model.dirty ? "Local draft" : "Cloud copy").foregroundStyle(model.dirty ? .orange : .secondary)
+                        Text(model.dirty ? (model.editable ? "Local draft · saves itself after a minute without changes" : "Local draft") : "Cloud copy").foregroundStyle(model.dirty ? .orange : .secondary)
                         if model.dirty && !model.draftConflict {
                             Button("Discard local changes") { model.discardLocalChanges() }.buttonStyle(.link).disabled(model.busy)
                         }
                         Spacer()
-                        Text("Text edits keep formatting · drawings and attachments retained").foregroundStyle(.secondary)
+                        Text("Formatting kept while you edit · click a checkbox to tick it").foregroundStyle(.secondary)
                     }.font(.caption).padding(10)
                 }
             } else {
@@ -212,6 +206,14 @@ struct NotesView: View {
                 .help("Download the latest cloud copy and archive local edits. To clear edits while offline, use Discard local changes.")
             Button { Task { await model.export() } } label: { Label("Export", systemImage: "square.and.arrow.up") }.disabled(model.busy || model.document == nil)
             Button { do { _ = try LocalStore.directory("Backups"); NSWorkspace.shared.open(LocalStore.root) } catch { model.error = error.localizedDescription } } label: { Label("Local copies", systemImage: "folder") }
+            Menu {
+                Button("Sync now…") { confirmAppleSync = true }
+                Toggle("Keep in sync automatically", isOn: $live.enabled)
+                Divider()
+                Toggle("Stay in menu bar when closed", isOn: $keepInMenuBar)
+            } label: { Label("Sync with Apple Notes", systemImage: "note.text") } primaryAction: { confirmAppleSync = true }
+                .disabled(model.busy || model.notes.isEmpty)
+                .help("Copy your Samsung notes, with formatting and checklists, into Apple Notes (On My Mac), and bring back text and checklist changes made there. Once synced, changes on either side follow automatically (menu).")
             Button { Task { await model.save() } } label: { Label("Save to cloud", systemImage: "icloud.and.arrow.up") }.disabled(model.busy || !model.dirty || !model.editable).keyboardShortcut("s")
         }
         Divider()
@@ -239,22 +241,27 @@ struct NotesView: View {
                 HStack { Button("Cancel") { model.pendingConnection = nil }; Spacer(); Button("Connect") { if let data = model.pendingConnection { Task { await model.importConnection(data, code: model.importCode) } } }.keyboardShortcut(.defaultAction) }
             }.padding(24).frame(width: 440)
         }
+        .confirmationDialog("Sync with Apple Notes?", isPresented: $confirmAppleSync) {
+            Button("Quit Notes and sync") { Task { await model.syncAppleNotes() } }
+        } message: {
+            Text("Apple Notes will be closed for a moment while the \"Samsung Notes\" folder in On My Mac is updated, then reopened. iCloud notes are never touched. Changes made in Apple Notes come back here as local drafts for you to review and save.")
+        }
         .alert("Samsung Cloud Notes", isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) { Button("OK") { model.error = nil } } message: { Text(model.error ?? "") }
         .onChange(of: model.selection) { value in Task { await model.select(value) } }
         .onChange(of: model.title) { _ in model.scheduleDraft() }
         .onChange(of: model.body) { _ in model.scheduleDraft() }
         .onChange(of: model.document?.serverID) { _ in
             showDrawing = model.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !(model.document?.drawingPages.isEmpty ?? true)
-            showFormatted = true
         }
         .onChange(of: model.folder) { _ in model.preserveDraft(); model.selection = model.visibleNotes.first?.id }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in model.preserveDraft() }
-        .task { await model.connect() }
+        // Start-up, the Samsung Cloud checks and quitting are handled by NotesAppDelegate.
         .frame(minWidth: 900, minHeight: 580)
     }
 }
 
 @main struct SamsungCloudNotesApp: App {
+    @NSApplicationDelegateAdaptor(NotesAppDelegate.self) var delegate
+    @AppStorage(MenuBarMode.key, store: MenuBarMode.store) private var keepInMenuBar = false
     init() {
         if CommandLine.arguments.contains("--updater-state-test") {
             Task { @MainActor in
@@ -277,8 +284,43 @@ struct NotesView: View {
             catch { fputs("Session import failed: \(error.localizedDescription)\n", stderr); exit(1) }
         }
         if CommandLine.arguments.contains("--self-test") {
-            do { try SelfTest.run(); try StickyMemoPreview.selfTest(); try NotesUpdateSelfTest.run(); print("Offline self-tests passed."); exit(0) }
+            do { try SelfTest.run(); try StickyMemoPreview.selfTest(); try NotesUpdateSelfTest.run(); try AppleNotesSelfTest.run(); print("Offline self-tests passed."); exit(0) }
             catch { fputs("Self-test failed: \(error.localizedDescription)\n", stderr); exit(1) }
+        }
+        if let position = CommandLine.arguments.firstIndex(of: "--apple-notes-dbtest"), CommandLine.arguments.count > position + 1 {
+            let path = CommandLine.arguments[position + 1]
+            Task { @MainActor in
+                do { print(try await AppleNotesSelfTest.database(path)); print(try await AppleNotesSelfTest.live(path)); exit(0) }
+                catch { fputs("Apple Notes database test failed: \(error.localizedDescription)\n", stderr); exit(1) }
+            }
+            RunLoop.main.run()
+        }
+        if let position = CommandLine.arguments.firstIndex(of: "--apple-notes-cachetest"), CommandLine.arguments.count > position + 1 {
+            let path = CommandLine.arguments[position + 1]
+            Task { @MainActor in
+                do { print(try await AppleNotesSelfTest.cached(path)); exit(0) }
+                catch { fputs("Apple Notes cache test failed: " + error.localizedDescription + "\n", stderr); exit(1) }
+            }
+            RunLoop.main.run()
+        }
+        if CommandLine.arguments.contains("--sync-apple-notes-from-cache") {
+            Task { @MainActor in
+                do { print(try await AppleNotesSelfTest.syncFromCache()); exit(0) }
+                catch { fputs("Apple Notes sync failed: " + error.localizedDescription + "\n", stderr); exit(1) }
+            }
+            RunLoop.main.run()
+        }
+        if CommandLine.arguments.contains("--sync-apple-notes") {
+            Task { @MainActor in
+                let model = NotesModel(); model.autoSelectFirst = false
+                await model.connect(cacheOnly: true)
+                guard !model.notes.isEmpty else { fputs("No cached notes: \(model.status)\n", stderr); exit(1) }
+                await model.syncAppleNotes()
+                print(model.status)
+                if let error = model.error { fputs(error + "\n", stderr); exit(1) }
+                exit(0)
+            }
+            RunLoop.main.run()
         }
         if CommandLine.arguments.contains("--verify-signout") {
             Task { @MainActor in
@@ -410,12 +452,19 @@ struct NotesView: View {
         }
     }
     var body: some Scene {
-        WindowGroup { NotesView().onAppear { NotesUpdateReadiness.acknowledge(); NotesAppUpdates.shared.checkAtLaunch() } }.defaultSize(width: 1150, height: 760)
+        WindowGroup(id: "main") {
+            NotesView(model: delegate.model, live: delegate.live)
+                .onAppear { NotesUpdateReadiness.acknowledge(); NotesAppUpdates.shared.checkAtLaunch() }
+        }.defaultSize(width: 1150, height: 760)
             .commands {
                 CommandGroup(after: .appSettings) {
+                    Toggle("Stay in Menu Bar When Closed", isOn: $keepInMenuBar)
                     Button("Install Command Line Tool…") { CommandLineTool.installFromApp() }
                 }
             }
+        MenuBarExtra("Samsung Cloud Notes", systemImage: "note.text", isInserted: $keepInMenuBar) {
+            NotesMenuBarContent(model: delegate.model, live: delegate.live)
+        }
     }
 
 }

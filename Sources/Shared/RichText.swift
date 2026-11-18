@@ -13,7 +13,7 @@ import Foundation
 //
 // The Android port (android/app/.../RichText.kt) mirrors this file; keep them in step.
 
-struct StyleRange: Equatable {
+struct StyleRange: Equatable, Codable {
     var key: String
     var value: String
     var start: Int
@@ -36,7 +36,7 @@ struct StyleRange: Equatable {
     var flag: String { value.split(separator: ",", omittingEmptySubsequences: false).last.map(String.init) ?? value }
 }
 
-struct RichText {
+struct RichText: Equatable {
     let text: String
     let ranges: [StyleRange]
 
@@ -49,6 +49,9 @@ struct RichText {
     private static let marker = try! NSRegularExpression(pattern: "<\\?(.*?)\\?>", options: [.dotMatchesLineSeparators])
     private static let token = try! NSRegularExpression(pattern: "'([^']*)'(?:='([^']*)')?")
     private static let newline = UInt16(UInt8(ascii: "\n"))
+    /// Picture and table anchors: one U+FFFC covered by an `objectSpan` range.
+    static let objectSpan = "objectSpan/objectSpan"
+    static let objectCharacter: UInt16 = 0xFFFC
 
     static func parse(_ encoded: String, orderData: [String] = []) throws -> RichText {
         if encoded.isEmpty { return RichText(text: "", ranges: []) }
@@ -151,6 +154,18 @@ struct RichText {
         let paragraphStarts = [0] + new.indices.filter { $0 > 0 && new[$0] == Self.newline }
         var result: [StyleRange] = []
         for range in ranges {
+            if range.key == Self.objectSpan {
+                // An object anchor covers exactly its U+FFFC: text typed beside a picture or
+                // table never joins it, and deleting the character removes the anchor.
+                guard let anchor = Self.firstAnchor(old, range, excluding: []) else { continue }
+                // Text typed just before the character shares its origin; skip past it.
+                var position = map(anchor)
+                while position < new.count, origin[position] == anchor, new[position] != Self.objectCharacter { position += 1 }
+                guard position < new.count, new[position] == Self.objectCharacter, origin[position] == anchor else { continue }
+                var moved = range; moved.start = position; moved.end = position + 1
+                result.append(moved)
+                continue
+            }
             if range.isEmpty {
                 let position = Self.keepSurrogates(new, map(range.start), forward: true)
                 var moved = range; moved.start = position; moved.end = position
@@ -176,9 +191,19 @@ struct RichText {
 
     /// Normalises legacy values that native Samsung parsers rejected in 1.1.0 uploads.
     func normalizedForUpload() -> RichText {
-        RichText(text: text, ranges: ranges.compactMap { range in
+        let units = Array(text.utf16)
+        var anchored = Set<Int>()
+        return RichText(text: text, ranges: ranges.compactMap { range in
             if range.isSpan && range.isEmpty { return nil } // caret-only typing styles
             var copy = range
+            if range.key == Self.objectSpan {
+                // Native apps anchor an object on exactly its U+FFFC. Earlier versions let typed
+                // text join the anchor and kept it after the picture was deleted.
+                guard let anchor = Self.firstAnchor(units, range, excluding: anchored) else { return nil }
+                anchored.insert(anchor)
+                copy.start = anchor; copy.end = anchor + 1
+                return copy
+            }
             switch range.key {
             case "paragraph/parsingState": copy.value = range.value.lowercased()
             case "span/fontSize":
@@ -190,6 +215,17 @@ struct RichText {
         })
     }
 
+    /// Samsung's own apps write a marker's attributes by kind: spans, then the object
+    /// anchor (tables, pictures), then paragraph attributes, then the section, both when
+    /// opening and closing them. Matching it keeps uploads byte-compatible with native notes.
+    static func markerKind(_ key: String) -> Int {
+        if key.hasPrefix("span/") { return 0 }
+        if key.hasPrefix("objectSpan/") { return 1 }
+        if key.hasPrefix("paragraph/") { return 2 }
+        if key.hasPrefix("sectionData/") { return 3 }
+        return 4
+    }
+
     /// Base64 `<text>` payload.
     func encode() -> String {
         if text.isEmpty && ranges.isEmpty { return "" }
@@ -198,15 +234,22 @@ struct RichText {
         var active: [StyleRange] = []
         var payload = ""
         for (index, position) in positions.enumerated() {
-            let closing = active.filter { $0.end == position }
+            let closing = active.filter { $0.end == position }.sorted { a, b in
+                let (ka, kb) = (Self.markerKind(a.key), Self.markerKind(b.key))
+                return ka != kb ? ka < kb : a.sequence < b.sequence
+            }
             active.removeAll { $0.end == position }
-            let closeTokens = closing.reversed().map { "'\($0.key)'" }
+            let closeTokens = closing.map { "'\($0.key)'" }
             var openTokens: [String] = []
-            // Zero-length entries first, as Samsung writes them, so FIFO and LIFO readers agree.
+            // Zero-length entries first, as Samsung writes them; then by kind, in the original order
+            // (which opens an outer range before an inner one with the same key, as a bare key
+            // closes the latest range with that key).
             let starting = ranges.filter { $0.start == position }.sorted { a, b in
                 if a.isEmpty != b.isEmpty { return a.isEmpty }
-                if a.end != b.end { return a.end > b.end }
-                return a.sequence < b.sequence
+                let (ka, kb) = (Self.markerKind(a.key), Self.markerKind(b.key))
+                if ka != kb { return ka < kb }
+                if a.sequence != b.sequence { return a.sequence < b.sequence }
+                return a.end > b.end
             }
             for range in starting {
                 openTokens.append("'\(range.key)'='\(range.value)'")
@@ -261,6 +304,13 @@ struct RichText {
         snapped.start = starts[first]
         snapped.end = last + 1 < starts.count ? starts[last + 1] : length
         return snapped
+    }
+
+    /// The first U+FFFC inside `range` not already claimed by another anchor.
+    private static func firstAnchor(_ units: [UInt16], _ range: StyleRange, excluding claimed: Set<Int>) -> Int? {
+        let upper = min(range.end, units.count)
+        guard range.start >= 0, range.start < upper else { return nil }
+        return (range.start..<upper).first { units[$0] == objectCharacter && !claimed.contains($0) }
     }
 
     private static func keepSurrogates(_ units: [UInt16], _ position: Int, forward: Bool) -> Int {

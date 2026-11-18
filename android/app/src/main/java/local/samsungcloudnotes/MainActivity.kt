@@ -11,9 +11,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import java.io.File
 import java.lang.ref.WeakReference
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class NotesApplication : Application() {
     override fun onCreate() {
@@ -74,6 +79,13 @@ class MainActivity : ComponentActivity() {
         SignInBridge.activity = WeakReference(this)
         intent?.data?.let { SignInBridge.deliver(it) }
         setContent { NotesTheme { NotesApp(model, ::openFile) } }
+        // Other devices' edits arrive without pulling to refresh while the app is open.
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                model.refreshIfStale(10_000)
+                while (true) { delay(20_000); model.refreshIfStale(60_000) }
+            }
+        }
     }
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)

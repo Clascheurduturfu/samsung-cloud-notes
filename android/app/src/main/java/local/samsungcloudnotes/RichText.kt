@@ -35,6 +35,9 @@ class RichText(val text: String, val ranges: List<StyleRange>) {
         private val marker = Regex("<\\?(.*?)\\?>", RegexOption.DOT_MATCHES_ALL)
         private val token = Regex("'([^']*)'(?:='([^']*)')?")
         private const val UNSUPPORTED = "This note uses formatting markup this version cannot rewrite safely. It is read-only here so the formatting is not lost."
+        /** Picture and table anchors: one U+FFFC covered by an `objectSpan` range. */
+        const val OBJECT_SPAN = "objectSpan/objectSpan"
+        const val OBJECT_CHARACTER = '￼'
 
         /** Samsung's span identifiers (spanOrderData and the sdocx rich-text model). */
         val spanTypes = mapOf(
@@ -138,6 +141,18 @@ class RichText(val text: String, val ranges: List<StyleRange>) {
         val paragraphStarts = listOf(0) + newText.indices.filter { it > 0 && newText[it] == '\n' }
         val result = mutableListOf<StyleRange>()
         for (range in ranges) {
+            if (range.key == OBJECT_SPAN) {
+                // An object anchor covers exactly its U+FFFC: text typed beside a picture or
+                // table never joins it, and deleting the character removes the anchor.
+                val anchor = firstAnchor(text, range, emptySet()) ?: continue
+                // Text typed just before the character shares its origin; skip past it.
+                var position = map(anchor)
+                while (position < newText.length && origin[position] == anchor && newText[position] != OBJECT_CHARACTER) position++
+                if (position < newText.length && newText[position] == OBJECT_CHARACTER && origin[position] == anchor) {
+                    result.add(range.copy(start = position, end = position + 1))
+                }
+                continue
+            }
             if (range.start == range.end) {
                 val position = keepSurrogates(newText, map(range.start), forward = true)
                 result.add(range.copy(start = position, end = position))
@@ -160,9 +175,21 @@ class RichText(val text: String, val ranges: List<StyleRange>) {
     }
 
     /** Normalises legacy values that native Samsung parsers rejected in 1.1.0 uploads. */
-    fun normalizedForUpload(): RichText = RichText(text, ranges.mapNotNull { range ->
-        if (range.isSpan && range.start == range.end) return@mapNotNull null // caret-only typing styles
-        when (range.key) {
+    fun normalizedForUpload(): RichText {
+        val anchored = mutableSetOf<Int>()
+        return RichText(text, ranges.mapNotNull { range -> normalizedRange(range, anchored) })
+    }
+
+    private fun normalizedRange(range: StyleRange, anchored: MutableSet<Int>): StyleRange? {
+        if (range.isSpan && range.start == range.end) return null // caret-only typing styles
+        if (range.key == OBJECT_SPAN) {
+            // Native apps anchor an object on exactly its U+FFFC. Earlier versions let typed
+            // text join the anchor and kept it after the picture was deleted.
+            val anchor = firstAnchor(text, range, anchored) ?: return null
+            anchored.add(anchor)
+            return range.copy(start = anchor, end = anchor + 1)
+        }
+        return when (range.key) {
             "paragraph/parsingState" -> range.copy(value = range.value.lowercase())
             "span/fontSize" -> {
                 val parts = range.value.split(",", limit = 2)
@@ -170,7 +197,20 @@ class RichText(val text: String, val ranges: List<StyleRange>) {
             }
             else -> range
         }
-    })
+    }
+
+    /**
+     * Samsung's own apps write a marker's attributes by kind: spans, then the object anchor
+     * (tables, pictures), then paragraph attributes, then the section, when opening and closing
+     * them. Matching it keeps uploads byte-compatible with native notes.
+     */
+    private fun markerKind(key: String): Int = when {
+        key.startsWith("span/") -> 0
+        key.startsWith("objectSpan/") -> 1
+        key.startsWith("paragraph/") -> 2
+        key.startsWith("sectionData/") -> 3
+        else -> 4
+    }
 
     /** Base64 `<text>` payload. */
     fun encode(): String {
@@ -181,11 +221,12 @@ class RichText(val text: String, val ranges: List<StyleRange>) {
         for ((index, position) in positions.withIndex()) {
             val closing = active.filter { it.end == position }
             active.removeAll(closing)
-            val closeTokens = closing.reversed().map { "'${it.key}'" }
+            val closeTokens = closing.sortedWith(compareBy<StyleRange> { markerKind(it.key) }.thenBy { it.sequence }).map { "'${it.key}'" }
             val openTokens = mutableListOf<String>()
-            // Zero-length entries first, as Samsung writes them, so FIFO and LIFO readers agree.
+            // Zero-length entries first, as Samsung writes them; then by kind, in the original order
+            // (which opens an outer range before an inner one with the same key).
             val starting = ranges.filter { it.start == position }
-                .sortedWith(compareBy<StyleRange> { it.end != it.start }.thenByDescending { it.end }.thenBy { it.sequence })
+                .sortedWith(compareBy<StyleRange> { it.end != it.start }.thenBy { markerKind(it.key) }.thenBy { it.sequence }.thenByDescending { it.end })
             for (range in starting) {
                 openTokens.add("'${range.key}'='${range.value}'")
                 if (range.end == position) openTokens.add("'${range.key}'") else active.add(range)
@@ -229,6 +270,13 @@ class RichText(val text: String, val ranges: List<StyleRange>) {
         var last = first
         while (last + 1 < starts.size && starts[last + 1] < range.end) last++
         return range.copy(start = starts[first], end = if (last + 1 < starts.size) starts[last + 1] else length)
+    }
+
+    /** The first U+FFFC inside [range] not already claimed by another anchor. */
+    private fun firstAnchor(source: String, range: StyleRange, claimed: Set<Int>): Int? {
+        val upper = minOf(range.end, source.length)
+        if (range.start < 0 || range.start >= upper) return null
+        return (range.start until upper).firstOrNull { source[it] == OBJECT_CHARACTER && it !in claimed }
     }
 
     private fun keepSurrogates(source: String, position: Int, forward: Boolean): Int =

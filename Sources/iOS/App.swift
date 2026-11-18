@@ -80,7 +80,6 @@ struct NotesRootView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var importing = false
     @State private var showDrawing = false
-    @State private var showFormatted = true
     @State private var preview: URL?
     @State private var shared: SharedFile?
     @State private var confirmLogout = false
@@ -130,10 +129,15 @@ struct NotesRootView: View {
         .onChange(of: model.body) { _ in model.scheduleDraft() }
         .onChange(of: model.document?.serverID) { _ in
             showDrawing = model.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !(model.document?.drawingPages.isEmpty ?? true)
-            showFormatted = true
         }
         .onChange(of: model.folder) { _ in model.preserveDraft(); model.selection = nil }
-        .onChange(of: scenePhase) { phase in if phase != .active { model.preserveDraft() } }
+        .onChange(of: scenePhase) { phase in
+            if phase != .active { model.preserveDraft() } else { Task { await model.refreshIfStale(10) } }
+        }
+        // Other devices' edits arrive without pulling to refresh while the app is open.
+        .onReceive(Timer.publish(every: 20, on: .main, in: .common).autoconnect()) { _ in
+            if scenePhase == .active { Task { await model.refreshIfStale(60) } }
+        }
         .task { model.autoSelectFirst = false; await model.connect() }
     }
 
@@ -206,17 +210,11 @@ struct NotesRootView: View {
                     Picker("View", selection: $showDrawing) { Text("Text").tag(false); Text("Drawing").tag(true) }
                         .pickerStyle(.segmented).padding(.horizontal).padding(.vertical, 8)
                 }
-                let formatted = document.richBody.flatMap { $0.hasVisibleFormatting ? $0 : nil }
-                if formatted != nil && !showDrawing {
-                    Picker("Text view", selection: $showFormatted) { Text("Formatted").tag(true); Text("Edit text").tag(false) }
-                        .pickerStyle(.segmented).padding(.horizontal).padding(.vertical, 8)
-                }
                 if showDrawing && !document.drawingPages.isEmpty { DrawingPreview(pages: document.drawingPages) }
-                else if showFormatted, let formatted {
-                    RichTextPreview(rich: formatted.withText(StyledText.normalized(model.body)), baseSize: 17)
-                } else {
-                    TextEditor(text: $model.body).font(.body).padding(.horizontal, 12)
-                        .disabled(!model.editable || model.busy || document.bodyObject == nil)
+                else {
+                    RichTextEditor(text: $model.body, rich: model.displayRich,
+                                   editable: model.editable && !model.busy && document.bodyObject != nil, baseSize: 17, objects: model.objects) { model.toggleCheckbox($0) }
+                        .id(document.serverID)
                 }
                 let attachments = document.assets.filter { !$0.isInternal }
                 if !attachments.isEmpty {

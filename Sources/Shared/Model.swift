@@ -13,6 +13,8 @@ import Combine
     @Published var search = ""
     @Published var title = ""
     @Published var body = ""
+    /// Checklist ticks made here without a text change; nil when the cloud formatting is unchanged.
+    @Published var richEdits: RichText?
     @Published var status = "Connect your Samsung account to load your notes."
     @Published var busy = false
     @Published var draftConflict = false
@@ -21,17 +23,49 @@ import Combine
     @Published var document: CloudDocument?
     @Published var pendingConnection: Data?
     @Published var importCode = ""
+    /// Pictures and tables of the open note by Samsung object id; pictures appear as they download.
+    @Published var objects: [String: NoteObject] = [:]
+    private var objectsTask: Task<Void, Never>?
+    private var objectAssets: [String: String] = [:]
     private var client: CloudClient?
     private var cache: NoteCache?
     private(set) var downloadedNotes = 0
-    private var loaded: [String: CloudDocument] = [:]
+    private(set) var loaded: [String: CloudDocument] = [:]
     private var generation = 0
     private var draftTask: Task<Void, Never>?
-    private let drafts: NoteDraftStore
+    private var autosaveTask: Task<Void, Never>?
+    /// Seconds without changes before an edit saves itself to Samsung Cloud.
+    static let autosaveDelay: UInt64 = 60
+    private var lastCheck = Date.distantPast
+    /// The stored draft the open note was shown with (an earlier unsaved edit, or one made in Apple
+    /// Notes), so typing here can be told apart from edits that arrived from elsewhere.
+    private(set) var restoredDraft: NoteDraft?
+    /// Typing here changed the open note (rather than a draft shown from elsewhere).
+    var editingHere: Bool {
+        guard document != nil, dirty else { return false }
+        return restoredDraft.map { currentDraft($0.commit) != $0 } ?? true
+    }
+    /// Hooks for the Mac's Apple Notes sync: a note was saved, typing started here, other devices changed notes.
+    var onSaved: ((CloudDocument) -> Void)?
+    var onLocalEdit: (() -> Void)?
+    var onCloudChanges: (() -> Void)?
+    let drafts: NoteDraftStore
     init(drafts: NoteDraftStore = NoteDraftStore()) { self.drafts = drafts }
     /// Opens the newest note after loading. Compact layouts navigate on selection, so they opt out.
     var autoSelectFirst = true
-    var dirty: Bool { document.map { $0.title != title || $0.body != body } ?? false }
+    var dirty: Bool { document.map { $0.title != title || $0.body != body || richEdits != nil } ?? false }
+    /// Formatting shown and saved for the current text: local checklist edits, else the cloud copy's.
+    var displayRich: RichText? { richEdits ?? document?.richBody }
+    func currentDraft(_ commit: String) -> NoteDraft {
+        NoteDraft(title: title, body: body, commit: commit, richText: richEdits?.text, richRanges: richEdits?.ranges)
+    }
+    func toggleCheckbox(_ paragraph: Int) {
+        guard editable, !busy, let base = displayRich else { return }
+        let text = StyledText.normalized(body)
+        guard let toggled = base.withText(text).togglingCheckbox(paragraph: paragraph) else { return }
+        richEdits = document?.richBody?.withText(text).checkStates == toggled.checkStates ? nil : toggled
+        scheduleDraft()
+    }
     var visibleNotes: [NoteRecord] {
         notes.filter { note in
             let inFolder = folder == "all" ? !note.trashed : folder == "trash" ? note.trashed : note.folder == folder && !note.trashed
@@ -79,15 +113,16 @@ import Combine
         guard !busy else { return }
         do {
             if let document, dirty, !draftConflict {
-                try LocalStore.writeDraft(id: document.serverID, title: title, body: body, commit: document.commit)
+                try drafts.write(currentDraft(document.commit), id: document.serverID)
             }
             try SamsungSignIn.shared.signOut()
             generation += 1
-            draftTask?.cancel(); draftTask = nil
+            draftTask?.cancel(); draftTask = nil; autosaveTask?.cancel(); autosaveTask = nil; restoredDraft = nil
             transientSession = nil
             client = nil; cache = nil; loaded = [:]
             document = nil; selection = nil; notes = []; folders = []
-            title = ""; body = ""; account = ""; folder = "all"; search = ""
+            title = ""; body = ""; richEdits = nil; account = ""; folder = "all"; search = ""
+            objectsTask?.cancel(); objects = [:]; objectAssets = [:]
             draftConflict = false; downloadedNotes = 0
             pendingConnection = nil; importCode = ""; error = nil
             status = "Signed out. Sign in with Samsung to load your notes."
@@ -128,6 +163,7 @@ import Combine
         do {
             let previous = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0.commit) })
             let index = try await client.loadIndex()
+            lastCheck = Date()
             notes = index.notes; folders = index.folders
             let allowed = Set(notes.filter { !$0.locked && !$0.encrypted }.map(\.id))
             loaded = loaded.filter { allowed.contains($0.key) }
@@ -156,16 +192,30 @@ import Combine
                 selection = nil; document = nil
             }
             if selection == nil, autoSelectFirst { selection = visibleNotes.first?.id }
-            // A local draft keeps its original cloud baseline for conflict checks.
-            if let id = selection, !dirty { await open(id) }
+            // A local draft keeps its original cloud baseline for conflict checks; an unchanged note stays as shown.
+            if let id = selection, !dirty, document?.serverID != id || document?.commit != notes.first(where: { $0.id == id })?.commit { await open(id) }
             status = "\(notes.filter { !$0.trashed }.count) notes · Updated \(Date().formatted(date: .omitted, time: .shortened))"
             if failures > 0 { status += " · \(failures) notes could not be downloaded" }
+            if notes.contains(where: { previous[$0.id] != $0.commit }) { onCloudChanges?() }
         } catch let error as SamsungHTTPError where error.path.hasPrefix("/auth/oauth2/") && [400, 401, 403].contains(error.status) {
             status = "Samsung sign-in expired · Cached notes and drafts retained. Choose Sign in with Samsung to reconnect."
         } catch {
             status = notes.isEmpty ? "Could not reach Samsung Cloud. Try Refresh." : "Offline · Showing cached notes and local drafts. Try Refresh to reconnect."
             if notes.isEmpty { self.error = error.localizedDescription }
         }
+    }
+    /// Checks Samsung Cloud for edits made on other devices without locking the editor: the index is
+    /// read in the background, and a full refresh (which briefly pauses editing) runs only when
+    /// something changed and nothing is being edited here.
+    func refreshIfStale(_ interval: TimeInterval) async {
+        guard let client, !busy, !dirty, Date().timeIntervalSince(lastCheck) >= interval else { return }
+        lastCheck = Date()
+        guard let index = try? await client.loadIndex(), !busy, !dirty else { return }
+        func signature(_ notes: [NoteRecord], _ folders: [FolderRecord]) -> [String] {
+            (notes.map { "\($0.id) \($0.commit) \($0.folder) \($0.trashed) \($0.locked)" } + folders.map { "\($0.id) \($0.name) \($0.parent)" }).sorted()
+        }
+        guard signature(index.notes, index.folders) != signature(notes, folders) else { return }
+        await refresh()
     }
     private func describe(_ index: Int, document: CloudDocument) { notes[index].describe(document) }
     func select(_ id: String?) async {
@@ -200,9 +250,10 @@ import Combine
             try cache?.save(doc,revision:doc.commit)
             try cache?.saveIndex(CloudIndex(notes:notes,folders:folders))
         }
-        document = doc; title = doc.title; body = doc.body; draftConflict = false
-        if restoringDraft, let draft = try? drafts.read(id), draft.title != doc.title || draft.body != doc.body {
-            title = draft.title; body = draft.body; draftConflict = draft.commit != doc.commit
+        document = doc; title = doc.title; body = doc.body; richEdits = nil; draftConflict = false; restoredDraft = nil
+        loadObjects(doc)
+        if restoringDraft, let draft = try? drafts.read(id), draft.title != doc.title || draft.body != doc.body || draft.richText != nil {
+            title = draft.title; body = draft.body; richEdits = draft.rich; draftConflict = draft.commit != doc.commit; restoredDraft = draft
             status = draftConflict ? "This Mac has unsaved edits from an older cloud copy. Discard local changes to use the downloaded note." : "Recovered unsaved local edits. Save when ready."
         } else {
             // Older clients wrote saved cloud baselines into Drafts. Remove a
@@ -224,49 +275,111 @@ import Combine
         guard !busy, let document else { return }
         draftTask?.cancel(); draftTask = nil; generation += 1
         do {
-            let current = dirty ? NoteDraft(title:title,body:body,commit:document.commit) : nil
+            let current = dirty ? currentDraft(document.commit) : nil
             try drafts.discard(document.serverID,current:current)
             let baseline = loaded[document.serverID] ?? document
-            self.document = baseline; title = baseline.title; body = baseline.body
-            draftConflict = false; error = nil
+            self.document = baseline; title = baseline.title; body = baseline.body; richEdits = nil
+            draftConflict = false; error = nil; restoredDraft = nil; autosaveTask?.cancel(); autosaveTask = nil
             status = "Local changes discarded. Showing the downloaded cloud copy; Refresh checks for newer changes. Recovery copy: Local copies → DraftHistory."
         } catch { self.error = "Could not archive your edits; the local draft was kept. " + error.localizedDescription }
     }
     func preserveDraft() {
-        guard let document, dirty, !draftConflict else { return }
-        do { try drafts.write(NoteDraft(title:title,body:body,commit:document.commit),id:document.serverID) }
+        // A stored draft shown untouched is already saved, and may since have been replaced by a newer Apple Notes edit.
+        guard let document, dirty, !draftConflict, editingHere else { return }
+        do { try drafts.write(currentDraft(document.commit),id:document.serverID) }
         catch { self.error = "Could not save your local draft: " + error.localizedDescription }
     }
     func scheduleDraft() {
         draftTask?.cancel()
-        guard let document, dirty, !draftConflict else { draftTask = nil; return }
+        guard let document, dirty, !draftConflict else { draftTask = nil; autosaveTask?.cancel(); autosaveTask = nil; return }
+        if editingHere { onLocalEdit?() }
         let id = document.serverID, revision = document.commit, ticket = generation
         draftTask = Task {
             try? await Task.sleep(nanoseconds:600_000_000)
             guard !Task.isCancelled, generation == ticket, self.document?.serverID == id, self.document?.commit == revision else { return }
             preserveDraft()
         }
+        scheduleAutosave(after: Self.autosaveDelay)
+    }
+    /// Saves the open note once it has gone `seconds` without changes (typed here or arriving from Apple Notes).
+    func scheduleAutosave(after seconds: UInt64) {
+        autosaveTask?.cancel(); autosaveTask = nil
+        guard let document, dirty, editable else { return }
+        let id = document.serverID, ticket = generation
+        autosaveTask = Task {
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            guard !Task.isCancelled, generation == ticket, self.document?.serverID == id, dirty, editable else { return }
+            if busy { scheduleAutosave(after: 5); return }
+            await save()
+        }
+    }
+    /// Saves the stored draft of a note that is not open here (an edit made in Apple Notes), with Save's checks.
+    @discardableResult func saveStoredDraft(_ id: String) async -> Bool {
+        guard let client, !busy, selection != id, let draft = try? drafts.read(id), let base = loaded[id],
+              draft.commit == base.commit, base.editIssue == nil, base.resource.attr("isLocked") != "true" else { return false }
+        busy = true; defer { busy = false }
+        do {
+            let fresh = try await client.save(try CloudDocument(serverID: id, data: base.original), title: draft.title, body: draft.body, rich: draft.rich)
+            loaded[id] = fresh
+            if let i = notes.firstIndex(where: { $0.id == id }) { notes[i].commit = fresh.commit; describe(i, document: fresh) }
+            try cache?.save(fresh, revision: fresh.commit)
+            try cache?.saveIndex(CloudIndex(notes: notes, folders: folders))
+            try drafts.removeIfMatches(id, draft: draft)
+            status = "Saved \"\(fresh.title.isEmpty ? "note" : fresh.title)\" from Apple Notes · \(Date().formatted(date: .omitted, time: .shortened))"
+            onSaved?(fresh)
+            return true
+        } catch {
+            status = "An Apple Notes edit could not be saved yet; it is kept as a local draft. " + error.localizedDescription
+            return false
+        }
     }
     func save() async {
         guard let client, let document, !busy, dirty, !draftConflict else { return }
+        autosaveTask?.cancel(); autosaveTask = nil
         preserveDraft(); busy = true; status = "Saving to Samsung Cloud…"
-        let id = document.serverID; let savedTitle = title; let savedBody = body
+        let id = document.serverID; let savedTitle = title; let savedBody = body; let savedRich = richEdits
         defer { busy = false }
         do {
             // Use a fresh object so a failed upload cannot mutate the displayed baseline.
             let copy = try CloudDocument(serverID: id, data: document.original)
-            let fresh = try await client.save(copy, title: savedTitle, body: savedBody)
+            let fresh = try await client.save(copy, title: savedTitle, body: savedBody, rich: savedRich)
             loaded[id] = fresh
             if let i = notes.firstIndex(where: { $0.id == id }) {
                 notes[i].commit = fresh.commit
                 try cache?.save(fresh, revision: fresh.commit)
             }
-            if selection == id { self.document = fresh; title = fresh.title; body = fresh.body }
+            if selection == id { self.document = fresh; title = fresh.title; body = fresh.body; richEdits = nil; restoredDraft = nil; loadObjects(fresh) }
             if let i = notes.firstIndex(where: { $0.id == id }) { describe(i, document: fresh) }
             try cache?.saveIndex(CloudIndex(notes: notes, folders: folders))
-            try drafts.removeIfMatches(id,draft:NoteDraft(title:savedTitle,body:savedBody,commit:document.commit))
+            try drafts.removeIfMatches(id,draft:NoteDraft(title:savedTitle,body:savedBody,commit:document.commit,richText:savedRich?.text,richRanges:savedRich?.ranges))
             status = "Saved to Samsung Cloud · \(Date().formatted(date: .omitted, time: .shortened))"
+            onSaved?(fresh)
         } catch { self.error = error.localizedDescription; status = "Save failed. Your local draft is retained." }
+    }
+    /// Shows `doc`'s tables at once and fetches its pictures (cache first); pictures already shown are kept.
+    func loadObjects(_ doc: CloudDocument) {
+        objectsTask?.cancel()
+        var next: [String: NoteObject] = [:]
+        var pending: [(id: String, asset: AssetRecord)] = []
+        for (id, source) in SamsungAttachments.sources(doc) {
+            switch source {
+            case .table(let cells): next[id] = .table(cells)
+            case .image(let asset):
+                if objectAssets[id] == asset.id, let shown = objects[id] { next[id] = shown } else { pending.append((id, asset)) }
+            }
+        }
+        objects = next
+        objectAssets = objectAssets.filter { next[$0.key] != nil }
+        guard !pending.isEmpty else { objectsTask = nil; return }
+        let serverID = doc.serverID
+        objectsTask = Task {
+            for (id, asset) in pending {
+                guard !Task.isCancelled else { return }
+                guard let data = try? await attachmentData(asset, document: doc), data.count <= 100_000_000,
+                      !Task.isCancelled, document?.serverID == serverID else { continue }
+                objects[id] = .image(data); objectAssets[id] = asset.id
+            }
+        }
     }
     func attachmentData(_ asset: AssetRecord, document: CloudDocument) async throws -> Data {
         if let data = cache?.asset(id: asset.id, revision: document.commit) { return data }

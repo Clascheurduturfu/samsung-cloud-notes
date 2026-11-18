@@ -191,6 +191,10 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
         val obj = bodyObject ?: return false
         if ((obj.attr("timeStamp").toLongOrNull() ?: 0L) > Int.MAX_VALUE) return true
         if ((resource.first("attributes")?.attr("editTime")?.toLongOrNull() ?: 0L) > Int.MAX_VALUE) return true
+        // Up to beta.6 a save could leave an empty span list, which Samsung's parsers cannot read.
+        for ((list, entry) in listOf("zeroLengthSpanList" to "zeroLengthSpan", "spanOrderDataList" to "spanOrderData")) {
+            if (obj.elements(list).any { it.elements(entry).isEmpty() }) return true
+        }
         val raw = obj.value("text").filterNot { it.isWhitespace() }
         val decoded = base64Decode(raw)?.let(::strictUtf8) ?: return false
         return decoded.contains("'paragraph/parsingState'='False'") || decoded.contains("'span/fontSize'='1,12'")
@@ -205,6 +209,33 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
     }
 
     val needsNativeRepair: Boolean get() = bodyNeedsNativeRepair || titleNeedsNativeRepair
+
+    /** Samsung object ids named by the body's anchors, including anchors that lost their character. */
+    private fun anchoredIds(rich: RichText): Set<String> =
+        rich.ranges.filter { it.key == RichText.OBJECT_SPAN }.map { it.value.substringBefore(',') }.toSet()
+
+    /**
+     * Drops the named inline objects from the note and its hash tree, with picture
+     * files no remaining object uses. Native clients leave empty lists out of the tree.
+     */
+    private fun removeObjects(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        val tree = resource.first("noteTree")
+        val removed = StringBuilder()
+        for (list in listOfNotNull(resource.first("floatingObjectList"), tree?.first("floatingObjectList"))) {
+            for (item in list.elements("object").filter { it.attr("id") in ids }) { removed.append(item.xmlString()); item.detach() }
+        }
+        val remaining = listOf("floatingObjectList", "pageList", "attributes").mapNotNull { resource.first(it)?.xmlString() }.joinToString("")
+        for (list in listOfNotNull(tree?.first("contentFileList"), resource.first("contentFileList"))) {
+            for (file in list.elements("contentFile")) {
+                val id = file.attr("id")
+                if (id.isNotEmpty() && removed.contains(id) && !remaining.contains(id)) file.detach()
+            }
+        }
+        for ((name, entry) in listOf("floatingObjectList" to "object", "contentFileList" to "contentFile")) {
+            tree?.first(name)?.takeIf { it.elements(entry).isEmpty() }?.detach()
+        }
+    }
 
     fun uploadXml(newTitle: String, newBody: String, nowMillis: Long = System.currentTimeMillis()): ByteArray {
         textIssue?.let { throw NotesException(it) }
@@ -221,24 +252,31 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
             val rich = richBody
             val encoded: String
             val orderData: List<String>
+            var anchoredAfter = emptySet<String>()
             // Repairs of plain notes written by older clients keep the verified 1.1.1 encoding.
             val legacyRepair = bodyNeedsNativeRepair && rich?.hasOnlyDefaultStyling == true
             if (rich != null && rich.text.isNotEmpty() && clean.isNotEmpty() && !legacyRepair) {
                 // Carry every span and paragraph style over to the edited text.
                 val updated = rich.withText(clean).normalizedForUpload()
                 encoded = updated.encode(); orderData = updated.spanOrderData()
+                anchoredAfter = anchoredIds(updated)
             } else {
                 if (rich == null && body.isNotEmpty()) throw NotesException(formattingIssue ?: "This note's formatting cannot be preserved by this version.")
                 encoded = StyledText.encode(newBody); orderData = StyledText.spanOrderData(newBody)
             }
             val text = obj.first("text") ?: XmlElement("text").also { obj.addChild(it) }
             text.stringValue = encoded
+            // Samsung's parsers skip to the next tag before checking for the end of a list,
+            // so an empty list makes them read the following <text> as an entry and fail
+            // (Windows: FAIL_PARSE_XML "out of range, parameter i"). Native clients omit
+            // empty lists; so must we. Zero-length (caret-only) styles are not carried over.
             val existingList = obj.first("spanOrderDataList")
             if (existingList != null) {
                 existingList.elements("spanOrderData").forEach { it.detach() }
                 for (value in orderData) {
                     existingList.addChild(XmlElement("spanOrderData").apply { set("val", value) })
                 }
+                if (orderData.isEmpty()) existingList.detach()
             } else if (orderData.isNotEmpty()) {
                 val list = XmlElement("spanOrderDataList")
                 for (value in orderData) {
@@ -246,7 +284,9 @@ class CloudDocument(val serverID: String, val original: ByteArray) {
                 }
                 obj.addChild(list)
             }
-            obj.first("zeroLengthSpanList")?.elements("zeroLengthSpan")?.forEach { it.detach() }
+            obj.elements("zeroLengthSpanList").forEach { it.detach() }
+            // A picture or table whose character was deleted is deleted with it.
+            removeObjects((rich?.let(::anchoredIds) ?: emptySet()) - anchoredAfter)
             obj.set("modifiedTime", micros); obj.set("timeStamp", "0")
             val digest = sha256(obj.bytes).hex()
             obj.set("hash", digest); tree.set("h", digest); tree.set("t", micros)

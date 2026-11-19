@@ -24,7 +24,7 @@ import local.samsungcloudnotes.*
 
 /** The native editor remains Samsung's. This supplies the account/cloud boundary only. */
 object NotesBridge {
-    const val version = "1.2.0-beta.3+6"
+    const val version = "1.2.0-rc.2"
     private lateinit var context: Context
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val refresh = Mutex()

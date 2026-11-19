@@ -10,7 +10,7 @@ from hooks import compatibility_hooks, native_hooks
 
 APK_SHA256 = "484d3dd599355789508034ba90af9a35e09f81532564a992c131710632a467ce"
 BASE_VERSION = "4.4.48.15"
-BETA_VERSION = "4.4.48.15-native-beta.3"
+BETA_VERSION = "4.4.48.15-native-rc.2"
 
 
 def add_standard_document_filter(manifest: str) -> str:

@@ -1,6 +1,6 @@
 # Native Samsung Notes on generic Android
 
-Status: **early beta `1.2.0-beta.3+6` (untested by the owner on physical hardware; emulator-validated only)**, merged into `main` in `1.1.1`. This work keeps Samsung's Android editor and native document engine. The existing Compose Android client and Apple clients remain separate applications.
+Status: **release candidate `1.2.0-rc.2`**, validated by the owner on a real Google Pixel (sign-in and two-way sync), after emulator validation. Merged into `main` in `1.1.1`. This work keeps Samsung's Android editor and native document engine. The existing Compose Android client and Apple clients remain separate applications.
 
 ## Approach and reference
 
@@ -16,7 +16,7 @@ Using a current owner-provided version avoids committing to the much older 4.4.0
 - `android/native-bridge`: a small Android activity/provider and account-contract adapter. It compiles without Samsung classes, refers to listeners through their public callback signatures, and reuses the original APK's Kotlin/coroutines runtime.
 - `android-samsung-port`: source-only compatibility shims, hash-pinned patches and a local build tool. The caller supplies an owned original APK and local signing key.
 
-The account screen displays `1.2.0-beta.3+6`; the native package reports `4.4.48.15-native-beta.3`. Download-only mode is the initial setting. Enabling **Two-way sync** restores Samsung's original folder and note upload phases, serializer, revision comparison and pending-edit handling. This is an emulator-validated beta, not a claim of support for every Android device.
+The account screen displays `1.2.0-rc.2`; the native package reports `4.4.48.15-native-rc.2`. Download-only mode is the initial setting. Enabling **Two-way sync** restores Samsung's original folder and note upload phases, serializer, revision comparison and pending-edit handling. It has been validated on a generic emulator and one real Pixel phone, not on every Android device.
 
 ## Using the native beta
 
@@ -89,8 +89,13 @@ The existing browser compatibility flags, encrypted callback handling, strict ac
 5. **Conflict/offline behavior:** concurrent modifications, offline pending changes, stale commits, renewal/revocation, account changes and interrupted transfers. Keep native conflict/history logic and prove that edits and unknown objects survive.
 6. **Compatibility and delivery:** repeat on API 29/34/37 and real non-Samsung hardware when available. Record unsupported One UI-only features separately. Publish only authored patch/build tools and documentation until distribution rights for a vendor-derived APK are established; local builds remain owner-supplied.
 
-The functional paths above passed on generic ARM64 API 37. API 29/34, real non-Samsung hardware, concurrent multi-device native edits, interrupted binary transfers, revocation and cross-account sign-in attempts still need broader validation. Native conflict/history logic is retained, but the Mac client's previous synthetic stale-write check is not evidence that every native conflict case has passed. The emulator cannot establish performance, stylus pressure, palm rejection, battery behavior or compatibility with every Android vendor. AI, coediting, biometric-locked/encrypted notes and Samsung-only system integrations are separate unvalidated features.
+The functional paths above passed on generic ARM64 API 37, and sign-in and two-way sync passed on a real Pixel. API 29/34, other vendors' hardware, concurrent multi-device native edits, interrupted binary transfers, revocation and cross-account sign-in attempts still need broader validation. Native conflict/history logic is retained, but the Mac client's previous synthetic stale-write check is not evidence that every native conflict case has passed. The emulator cannot establish performance, stylus pressure, palm rejection, battery behavior or compatibility with every Android vendor. AI, coediting, biometric-locked/encrypted notes and Samsung-only system integrations are separate unvalidated features.
 
+
+## Local validation record — 2026-11-19 (rc.2)
+
+- The owner tested the port by hand on a physical Google Pixel phone (not a streamed Firebase device). Samsung browser sign-in and two-way sync worked. A few minor UI issues were seen; none blocks release.
+- `1.2.0-rc.2` is the `beta.3+6` code renamed: only the bridge version (`1.2.0-rc.2`), the native version name (`4.4.48.15-native-rc.2`) and the output file names changed. The signing key alias is unchanged, so rc.2 installs as an update. Six patch-profile checks passed.
 
 ## Local validation record — 2026-11-17 (beta.3+6)
 

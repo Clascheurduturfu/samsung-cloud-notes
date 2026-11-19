@@ -2,7 +2,9 @@
 
 ## 1.2.0-rc.2 — 2026-11-18
 
-Second release candidate for 1.2.0 (Mac fixes).
+Second release candidate for 1.2.0 (Mac fixes, and the native Android port).
+
+- **Native Samsung Notes port: release candidate.** Validated by hand on a real Pixel phone: Samsung sign-in and two-way sync work. Its version is now `1.2.0-rc.2` (native package `4.4.48.15-native-rc.2`), with the same code as `1.2.0-beta.3+6`.
 
 - **Notes deleted in Samsung Notes leave Apple Notes too.** A note deleted or moved to the trash on another device goes to **Recently Deleted** in On My Mac, where Notes keeps it for 30 days. A note you edited in Apple Notes since the last sync is kept there instead, as an ordinary note. Notes from before this version are covered, so earlier leftovers are cleaned up on the next sync. Notes that are only locked, not downloaded yet, or belong to another Samsung account are never removed.
 - **Deleting a note on another device now counts as a change**, so Apple Notes is updated straight away instead of waiting for the next edit.

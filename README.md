@@ -32,10 +32,10 @@
 | `scnotes` CLI | Runs inside the signed Mac app; `edit --resend` repairs legacy uploads |
 | iPhone / iPad | iOS 16+, SwiftUI, shares `Sources/Shared` upload/sync fix; offline simulator checks passed |
 | Android (standalone) | 8.0+ (API 26), Kotlin/Compose port aligned with `Cloud.swift` upload/sync/draft fixes; JVM unit tests & debug APK passed |
-| Android (native port — **Beta**) | Source-only patcher/bridge (`1.2.0-beta.3+5`) for owner-supplied Samsung Notes `4.4.48.15`; **beta, still untested by the author on real hardware** |
+| Android (native port — **Release candidate**) | Patcher/bridge (`1.2.0-rc.2`) for owner-supplied Samsung Notes `4.4.48.15`; validated on a real Pixel |
 | Windows | Optional connection-export helper, version 0.1.3 |
 
-**Native Samsung editor beta (untested on real hardware):** the separate [native Android port](docs/android-native-port.md) retains Samsung's text, pen and page engine and supplies independent browser sign-in plus cloud sync. Its source-only builder takes an owner-supplied, hash-pinned Samsung Notes APK. `1.2.0-beta.3+5` passed synthetic/emulator checks during development, **but remains an unverified beta on physical Android devices (the author has not tested it in real use yet)**. Vendor-derived APKs are local test artifacts and are not distributed in this repository or on Releases. The Compose client above remains the fully authored Android alternative.
+**Native Samsung editor (release candidate):** the separate [native Android port](docs/android-native-port.md) retains Samsung's text, pen and page engine and supplies independent browser sign-in plus cloud sync. Its source-only builder takes an owner-supplied, hash-pinned Samsung Notes APK. `1.2.0-rc.2` passed emulator checks during development, and the author validated sign-in and two-way sync on a real Pixel phone. Vendor-derived APKs are local test artifacts and are not distributed in this repository or on Releases. The Compose client above remains the fully authored Android alternative.
 
 ## Get started
 

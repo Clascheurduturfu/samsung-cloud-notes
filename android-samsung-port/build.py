@@ -86,11 +86,11 @@ def main() -> None:
                 raise RuntimeError("classes14.dex collision")
             target.write(dex / "classes.dex", "classes14.dex", compress_type=zipfile.ZIP_DEFLATED)
         unsigned = injected
-    aligned = stage / "SamsungNotes-native-beta.3-unsigned.apk"
+    aligned = stage / "SamsungNotes-native-1.2.0-rc.2-unsigned.apk"
     run([str(tools / ("zipalign" + exe)), "-P", "16", "4", str(unsigned), str(aligned)])
     output = aligned
     if args.keystore:
-        output = stage / "SamsungNotes-native-beta.3.apk"
+        output = stage / "SamsungNotes-native-1.2.0-rc.2.apk"
         run([java, "-jar", str(tools / "lib/apksigner.jar"), "sign", "--ks", str(args.keystore), "--ks-key-alias", args.key_alias,
              "--ks-pass", "env:" + args.password_env, "--v4-signing-enabled", "false", "--out", str(output), str(aligned)])
         run([java, "-jar", str(tools / "lib/apksigner.jar"), "verify", str(output)])

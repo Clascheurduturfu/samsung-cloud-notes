@@ -32,10 +32,10 @@
 | `scnotes` CLI | Runs inside the signed Mac app; `edit --resend` repairs legacy uploads |
 | iPhone / iPad | iOS 16+, SwiftUI, shares `Sources/Shared` upload/sync fix; offline simulator checks passed |
 | Android (standalone) | 8.0+ (API 26), Kotlin/Compose port aligned with `Cloud.swift` upload/sync/draft fixes; JVM unit tests & debug APK passed |
-| Android (native port — **Release candidate**) | Patcher/bridge (`1.2.0-rc.2`) for owner-supplied Samsung Notes `4.4.48.15`; validated on a real Pixel |
+| Android (native port — **Release candidate**) | Prebuilt APK and patcher/bridge (`1.2.0-rc.2`) based on Samsung Notes `4.4.48.15`; Android 10+, ARM; validated on a real Pixel |
 | Windows | Optional connection-export helper, version 0.1.3 |
 
-**Native Samsung editor (release candidate):** the separate [native Android port](docs/android-native-port.md) retains Samsung's text, pen and page engine and supplies independent browser sign-in plus cloud sync. Its source-only builder takes an owner-supplied, hash-pinned Samsung Notes APK. `1.2.0-rc.2` passed emulator checks during development, and the author validated sign-in and two-way sync on a real Pixel phone. Vendor-derived APKs are local test artifacts and are not distributed in this repository or on Releases. The Compose client above remains the fully authored Android alternative.
+**Native Samsung editor (release candidate):** the separate [native Android port](docs/android-native-port.md) retains Samsung's text, pen and page engine and supplies independent browser sign-in plus cloud sync. A prebuilt `SamsungNotes-native-1.2.0-rc.2.apk` is attached to the [1.2.0-rc.2 release](https://github.com/Clascheurduturfu/samsung-cloud-notes/releases/tag/v1.2.0-rc.2) for non-Samsung Android 10+ ARM phones; it cannot replace Samsung Notes on a Galaxy. The builder can also produce it from your own hash-pinned Samsung Notes APK. `1.2.0-rc.2` passed emulator checks during development, and the author validated sign-in and two-way sync on a real Pixel phone. The Compose client above remains the fully authored Android alternative.
 
 ## Get started
 

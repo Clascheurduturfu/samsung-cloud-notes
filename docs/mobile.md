@@ -4,7 +4,7 @@ New in **1.1**. Both mobile apps sign in on the device itself, register their ow
 
 ## Why not Samsung's Android app?
 
-Samsung Notes is distributed for Galaxy devices; on other phones its Samsung Cloud sync is unavailable, and sideloaded copies are unsupported. Redistributing the APK would also break this project's rule of shipping no Samsung binaries. The standalone Android client therefore speaks the same protocol directly instead of bundling Samsung's app. A separate source-only [native Android port](android-native-port.md) (`1.2.0-rc.2`) that patches an owner-supplied Samsung Notes `4.4.48.15` APK is also in the repository as a **release candidate, validated on a real Pixel** and is not shipped as a prebuilt APK.
+Samsung Notes is distributed for Galaxy devices; on other phones its Samsung Cloud sync is unavailable, and sideloaded copies are unsupported. The standalone Android client therefore speaks the same protocol directly instead of bundling Samsung's app. A separate [native Android port](android-native-port.md) (`1.2.0-rc.2`) that patches an owner-supplied Samsung Notes `4.4.48.15` APK is also in the repository as a **release candidate, validated on a real Pixel**. A prebuilt rc.2 APK is attached to the 1.2.0-rc.2 release.
 
 ## iPhone and iPad
 

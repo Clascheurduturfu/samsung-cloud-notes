@@ -20,7 +20,7 @@ The account screen displays `1.2.0-rc.2`; the native package reports `4.4.48.15-
 
 ## Using the native beta
 
-1. Build locally from the exact owner-supplied APK using [the builder](../android-samsung-port/README.md), then install on a generic ARM test device. A port signed with a local key cannot replace the official Samsung-signed installation. Keep the same local key for updates.
+1. Install `SamsungNotes-native-1.2.0-rc.2.apk` from the [1.2.0-rc.2 release](https://github.com/Clascheurduturfu/samsung-cloud-notes/releases/tag/v1.2.0-rc.2) on a non-Samsung ARM phone running Android 10 or later, or build it yourself from the exact supported APK using [the builder](../android-samsung-port/README.md). A port signed with a local key cannot replace the official Samsung-signed installation. Keep the same local key for updates.
 2. Open Samsung Notes, then **Settings → Samsung Cloud** and **Sign in with Samsung**. Complete verification in the browser. Windows and the Samsung Account system app are not required.
 3. Use **Download notes** for a local library. Enable **Two-way sync** to send native edits and folder changes to Samsung Cloud; **Sync now** requests an immediate sync. Samsung's normal Wi-Fi-only setting still applies.
 4. Edit text, handwriting and pages in Samsung's editor. Native documents remain available offline; edits are queued locally until the next successful sync.
@@ -87,7 +87,7 @@ The existing browser compatibility flags, encrypted callback handling, strict ac
 3. **Native downsync:** connect the native authorization boundary and server discovery; enumerate folders; download representative text, images and handwriting into the original document engine. Establish a verified read-only boundary before allowing background native sync to run against the account.
 4. **Native upsync:** create a uniquely named test note; upload using the native serializer; verify it from the unmodified Samsung client; edit its text and pen objects on both clients. Do not test against existing user notes.
 5. **Conflict/offline behavior:** concurrent modifications, offline pending changes, stale commits, renewal/revocation, account changes and interrupted transfers. Keep native conflict/history logic and prove that edits and unknown objects survive.
-6. **Compatibility and delivery:** repeat on API 29/34/37 and real non-Samsung hardware when available. Record unsupported One UI-only features separately. Publish only authored patch/build tools and documentation until distribution rights for a vendor-derived APK are established; local builds remain owner-supplied.
+6. **Compatibility and delivery:** repeat on API 29/34/37 and real non-Samsung hardware when available. Record unsupported One UI-only features separately. From rc.2 a prebuilt APK, signed with the project's port key, is attached to the release; the builder still produces the same app from an owner-supplied APK.
 
 The functional paths above passed on generic ARM64 API 37, and sign-in and two-way sync passed on a real Pixel. API 29/34, other vendors' hardware, concurrent multi-device native edits, interrupted binary transfers, revocation and cross-account sign-in attempts still need broader validation. Native conflict/history logic is retained, but the Mac client's previous synthetic stale-write check is not evidence that every native conflict case has passed. The emulator cannot establish performance, stylus pressure, palm rejection, battery behavior or compatibility with every Android vendor. AI, coediting, biometric-locked/encrypted notes and Samsung-only system integrations are separate unvalidated features.
 
@@ -96,6 +96,7 @@ The functional paths above passed on generic ARM64 API 37, and sign-in and two-w
 
 - The owner tested the port by hand on a physical Google Pixel phone (not a streamed Firebase device). Samsung browser sign-in and two-way sync worked. A few minor UI issues were seen; none blocks release.
 - `1.2.0-rc.2` is the `beta.3+6` code renamed: only the bridge version (`1.2.0-rc.2`), the native version name (`4.4.48.15-native-rc.2`) and the output file names changed. The signing key alias is unchanged, so rc.2 installs as an update. Six patch-profile checks passed.
+- Pinned rebuild on Windows: `build.py --bridge` from the owner's 4.4.48.15 APK (SHA-256 matched the profile), official Apktool 3.0.3, Temurin 21.0.13 and build-tools 37.0.0. Output `SamsungNotes-native-1.2.0-rc.2.apk`, SHA-256 `6555c99559d03b6744583741b3c49bf5adb6fd48f008a1d816cefd429e98be44`, version name `4.4.48.15-native-rc.2`, ARM64 and ARMv7. `apksigner` verified it with the same signing certificate as beta.3+6.
 
 ## Local validation record — 2026-11-17 (beta.3+6)
 

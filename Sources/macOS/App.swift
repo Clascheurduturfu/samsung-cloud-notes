@@ -212,6 +212,8 @@ struct NotesView: View {
                 Divider()
                 Toggle("Stay in menu bar when closed", isOn: $keepInMenuBar)
             } label: { Label("Sync with Apple Notes", systemImage: "note.text") } primaryAction: { confirmAppleSync = true }
+                // This button keeps the menu it was built with, check marks included; rebuilt when a setting changes.
+                .id("\(live.enabled) \(keepInMenuBar)")
                 .disabled(model.busy || model.notes.isEmpty)
                 .help("Copy your Samsung notes, with formatting and checklists, into Apple Notes (On My Mac), and bring back text and checklist changes made there. Once synced, changes on either side follow automatically (menu).")
             Button { Task { await model.save() } } label: { Label("Save to cloud", systemImage: "icloud.and.arrow.up") }.disabled(model.busy || !model.dirty || !model.editable).keyboardShortcut("s")
@@ -263,6 +265,7 @@ struct NotesView: View {
     @NSApplicationDelegateAdaptor(NotesAppDelegate.self) var delegate
     @AppStorage(MenuBarMode.key, store: MenuBarMode.store) private var keepInMenuBar = false
     init() {
+        if MenuBarMode.store.bool(forKey: MenuBarMode.key) { MenuBarMode.forgetHiddenItem() }
         if CommandLine.arguments.contains("--updater-state-test") {
             Task { @MainActor in
                 do { try await NotesUpdateSelfTest.runState(); try await DraftSelfTest.run(); exit(0) }
@@ -290,7 +293,7 @@ struct NotesView: View {
         if let position = CommandLine.arguments.firstIndex(of: "--apple-notes-dbtest"), CommandLine.arguments.count > position + 1 {
             let path = CommandLine.arguments[position + 1]
             Task { @MainActor in
-                do { print(try await AppleNotesSelfTest.database(path)); print(try await AppleNotesSelfTest.live(path)); exit(0) }
+                do { print(try await AppleNotesSelfTest.database(path)); print(try await AppleNotesSelfTest.live(path)); print(try await AppleNotesSelfTest.deletions(path)); exit(0) }
                 catch { fputs("Apple Notes database test failed: \(error.localizedDescription)\n", stderr); exit(1) }
             }
             RunLoop.main.run()
@@ -462,8 +465,10 @@ struct NotesView: View {
                     Button("Install Command Line Tool…") { CommandLineTool.installFromApp() }
                 }
             }
-        MenuBarExtra("Samsung Cloud Notes", systemImage: "note.text", isInserted: $keepInMenuBar) {
+        MenuBarExtra(isInserted: $keepInMenuBar) {
             NotesMenuBarContent(model: delegate.model, live: delegate.live)
+        } label: {
+            NotesMenuBarLabel(model: delegate.model, live: delegate.live)
         }
     }
 

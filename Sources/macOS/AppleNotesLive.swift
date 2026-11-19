@@ -10,9 +10,11 @@ import Foundation
 /// - Typing a note here closes Notes, so a note is never edited in two places at once. Notes comes back
 ///   in the background once that edit is saved and written.
 @MainActor final class AppleNotesLive: ObservableObject {
-    @Published var enabled = UserDefaults.standard.object(forKey: "appleNotesAutoSync") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(enabled, forKey: "appleNotesAutoSync") }
+    @Published var enabled = MenuBarMode.store.object(forKey: "appleNotesAutoSync") as? Bool ?? true {
+        didSet { MenuBarMode.store.set(enabled, forKey: "appleNotesAutoSync") }
     }
+    /// Check for Changes Now is running (shown in the menu bar).
+    @Published private(set) var checking = false
     private weak var model: NotesModel?
     private var timer: Timer?
     private let path = AppleNoteStore.defaultPath
@@ -91,27 +93,45 @@ import Foundation
         // Text typed here is stored first, so an Apple edit of the same note counts as a conflict, never replaces it.
         model.preserveDraft()
         do {
-            let report = try await AppleNotesSync.run(model.appleSyncItems, drafts: model.drafts, writes: false, load: load(model))
+            let report = try await AppleNotesSync.run(model.appleSyncItems, drafts: model.drafts, writes: false, index: model.appleIndex, load: load(model))
             show(report)
             // Notes that need writing (a new Samsung note, say) are written soon, but not in a loop.
             if report.pendingWrites > 0, Date().timeIntervalSince(lastWrite) >= 60 { requestWrite() }
         } catch { pause("Apple Notes could not be read: " + error.localizedDescription) }
     }
 
+    /// Check for Changes Now: reads Samsung Cloud at once and writes what changed into Notes right away, instead of
+    /// waiting for the next automatic check and for Notes to be idle.
+    func checkNow() async {
+        guard let model, !checking, !model.account.isEmpty else { return }
+        checking = true; defer { checking = false }
+        pausedUntil = .distantPast
+        model.status = "Checking Samsung Cloud…"
+        // A save or pass already running finishes first (up to half a minute).
+        for _ in 0..<150 where model.busy { try? await Task.sleep(nanoseconds: 200_000_000) }
+        await model.refresh()
+        guard active else { return }
+        for _ in 0..<150 where running || AppleNotesSync.inProgress { try? await Task.sleep(nanoseconds: 200_000_000) }
+        await writePass(announce: true)
+    }
+
     /// Writes Samsung changes into Notes, closing it only when something must actually be written.
-    private func writePass() async {
+    private func writePass(announce: Bool = false) async {
         guard let model, !running else { return }
         running = true; defer { running = false }
         writeWanted = nil; lastWrite = Date()
         model.preserveDraft()
-        let items = model.appleSyncItems
+        let items = model.appleSyncItems, index = model.appleIndex
         do {
-            let plan = try await AppleNotesSync.run(items, drafts: model.drafts, writes: false, load: load(model))
+            let plan = try await AppleNotesSync.run(items, drafts: model.drafts, writes: false, index: index, load: load(model))
             show(plan)
-            guard plan.pendingWrites > 0 else { return }
+            guard plan.pendingWrites > 0 else {
+                if announce, plan.imported.isEmpty { model.status = "Up to date with Samsung Cloud · Checked \(Date().formatted(date: .omitted, time: .shortened))" }
+                return
+            }
             let backup = Date().timeIntervalSince(lastBackup) >= 600
             let report = try await AppleNotesSync.run(items, drafts: model.drafts, reopen: closedForEditing ? .never : .ifRunning,
-                                                      backup: backup, load: load(model))
+                                                      backup: backup, index: index, load: load(model))
             if backup { lastBackup = Date() }
             stamp = storeStamp(); unread = false
             show(report)

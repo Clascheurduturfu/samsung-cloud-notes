@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0-rc.2 — 2026-11-18
+
+Second release candidate for 1.2.0 (Mac fixes).
+
+- **Notes deleted in Samsung Notes leave Apple Notes too.** A note deleted or moved to the trash on another device goes to **Recently Deleted** in On My Mac, where Notes keeps it for 30 days. A note you edited in Apple Notes since the last sync is kept there instead, as an ordinary note. Notes from before this version are covered, so earlier leftovers are cleaned up on the next sync. Notes that are only locked, not downloaded yet, or belong to another Samsung account are never removed.
+- **Deleting a note on another device now counts as a change**, so Apple Notes is updated straight away instead of waiting for the next edit.
+- **Check for Changes Now** reads Samsung Cloud at once and writes the result into Apple Notes immediately. The menu bar icon turns into arrows and the menu shows "Checking Samsung Cloud…" while it runs, then "Up to date with Samsung Cloud" or what changed.
+- **Check marks in the Sync with Apple Notes menu** follow the settings at once, whichever menu changed them.
+- **The menu bar icon always comes back.** After **Stay in menu bar when closed** had been turned off once, macOS could remember the icon as hidden and leave it out the next time the option was turned on, in a later launch.
+
 ## 1.2.0-rc.1 — 2026-11-18
 
 First release candidate for 1.2.0, for **macOS, iOS and the standalone Android client**. It includes everything from the 1.2.0 betas below.

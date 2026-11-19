@@ -5,7 +5,7 @@ import FoundationXML
 import CryptoKit
 import Security
 
-let appVersion = "1.2.0-rc.1"
+let appVersion = "1.2.0-rc.2"
 let appShortVersion = appVersion.components(separatedBy: "-")[0]
 var transientSession: AccountSession?
 

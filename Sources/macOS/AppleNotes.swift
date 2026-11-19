@@ -765,6 +765,18 @@ final class AppleNoteStore {
         try insertAttachments(export.attachments, note: found.pk, modified: modified)
     }
 
+    /// Moves a note to On My Mac's Recently Deleted, as deleting it in Notes does: Notes keeps it there for 30 days
+    /// from `date`, and Recover brings it back. False when this store has no Recently Deleted folder.
+    func moveToRecentlyDeleted(_ found: Found, at date: Date) throws -> Bool {
+        guard let trash = try object("select * from ZICCLOUDSYNCINGOBJECT where ZIDENTIFIER='TrashFolder-LocalAccount' and Z_ENT=?", [.int(entities["ICFolder"]!)]),
+              let trashPK = trash["Z_PK"]?.int, trash["ZFOLDERTYPE"]?.int == 1, trash["ZMARKEDFORDELETION"]?.int != 1,
+              let row = try object("select * from ZICCLOUDSYNCINGOBJECT where Z_PK=?", [.int(found.pk)]) else { return false }
+        var values: [String: SQLValue] = [Self.column(row, "ZFOLDER") ?? "ZFOLDER": .int(trashPK)]
+        if row["ZFOLDERMODIFICATIONDATE"] != nil { values["ZFOLDERMODIFICATIONDATE"] = .real(date.timeIntervalSinceReferenceDate) }
+        try db.update("ZICCLOUDSYNCINGOBJECT", pk: found.pk, values)
+        return true
+    }
+
     // MARK: Attachments
 
     private func isLocal(_ row: [String: SQLValue]) -> Bool {
@@ -923,6 +935,9 @@ struct AppleMirror: Codable {
     /// 3: attachments on lines of their own, as Notes keeps them (1.2.0-beta.5).
     static let format = 3
     var folder: String?
+    /// The Samsung account the mirror was made with (hashed; nil before 1.2.0-rc.2). A note missing from another
+    /// account's index is never taken as deleted.
+    var account: String?
     var notes: [String: Entry] = [:]
 
     static func url() throws -> URL { try LocalStore.directory("AppleNotes").appendingPathComponent("mirror.json") }
@@ -946,10 +961,16 @@ struct AppleMirror: Codable {
         /// Changed on both sides in the same place: the Apple version was kept as its own note.
         var kept: [String] = []
         var merged = 0
-        /// Read-only passes: Apple notes that need writing (created, replaced or kept), left for a write pass.
+        /// Deleted in Samsung (or moved to its trash): moved to Recently Deleted in Notes.
+        var deleted = 0
+        /// Deleted in Samsung after being edited in Notes: kept in Notes as an ordinary note.
+        var unlinked: [String] = []
+        /// Read-only passes: Apple notes that need writing (created, replaced, kept or deleted), left for a write pass.
         var pendingWrites = 0
         var summary: String {
             var parts = ["Apple Notes: \(created) added", "\(updated) updated", "\(imported.count) changes brought back as drafts"]
+            if deleted > 0 { parts.append("\(deleted) deleted in Samsung (moved to Recently Deleted)") }
+            if !unlinked.isEmpty { parts.append("\(unlinked.count) deleted in Samsung but edited in Apple Notes (kept there)") }
             if merged > 0 { parts.append("\(merged) edited on both sides and merged") }
             if !kept.isEmpty { parts.append("\(kept.count) edited on both sides in the same place (your Apple Notes version was kept as a separate note)") }
             if attachments > 0 { parts.append("\(attachments) pictures, tables and drawings written") }
@@ -987,6 +1008,18 @@ struct AppleMirror: Codable {
 
     private(set) static var inProgress = false
 
+    /// Samsung Cloud's note index for the signed-in account: tells notes deleted or trashed there apart from
+    /// notes that are only not downloaded yet, locked, or another account's.
+    struct SamsungIndex {
+        let account: String
+        let present: Set<String>
+        let trashed: Set<String>
+        init(account: String, notes: [NoteRecord]) {
+            self.account = SHA256.hash(data: Data(account.utf8)).map { String(format: "%02x", $0) }.joined()
+            present = Set(notes.map(\.id)); trashed = Set(notes.filter(\.trashed).map(\.id))
+        }
+    }
+
     /// Pictures resolved per note revision, so frequent read-only passes do not reread them.
     private static var resolvedMemo: [String: (commit: String, value: (inline: [AppleAttachment?], drawings: [AppleAttachment]))] = [:]
 
@@ -1008,7 +1041,7 @@ struct AppleMirror: Codable {
     /// drafts, and notes that need writing are counted in `pendingWrites`.
     static func run(_ items: [(record: NoteRecord, document: CloudDocument)], drafts: NoteDraftStore,
                     path: String = AppleNoteStore.defaultPath, mirrorURL: URL? = nil, manageNotesApp: Bool = true,
-                    writes: Bool = true, reopen: Reopen = .always, backup makeBackup: Bool = true,
+                    writes: Bool = true, reopen: Reopen = .always, backup makeBackup: Bool = true, index: SamsungIndex? = nil,
                     load: (AssetRecord, CloudDocument) async -> Data? = { _, _ in nil }) async throws -> Report {
         let mirrorURL = try mirrorURL ?? AppleMirror.url()
         guard FileManager.default.fileExists(atPath: path) else {
@@ -1156,6 +1189,22 @@ struct AppleMirror: Codable {
                     mirror.notes[id] = fresh; report.kept.append(id)
                 }
             }
+            // Deleted in Samsung, or moved to its trash: the Apple copy goes to Recently Deleted, unless it was
+            // edited in Notes since the last sync (it then stays there as an ordinary note).
+            guard let index else { return }
+            if mirror.account == nil, mirror.notes.keys.contains(where: index.present.contains) { mirror.account = index.account }
+            let synced = Set(items.map { $0.document.serverID })
+            for (id, entry) in mirror.notes.sorted(by: { $0.key < $1.key }) where !synced.contains(id) {
+                guard index.trashed.contains(id) || (!index.present.contains(id) && mirror.account == index.account) else { continue }
+                guard let found = try store.find(identifier: entry.identifier), !found.deleted, let apple = found.content else {
+                    mirror.notes[id] = nil; continue // already deleted in Notes
+                }
+                if apple.fingerprint != entry.fingerprint && (entry.base.map { $0.standalone != apple.standalone } ?? true) {
+                    mirror.notes[id] = nil; report.unlinked.append(id); continue
+                }
+                if deferred() { continue }
+                if try store.moveToRecentlyDeleted(found, at: Date()) { mirror.notes[id] = nil; report.deleted += 1 }
+            }
         }
         if writes { try store.transaction(pass) } else { try pass() }
         try mirror.save(mirrorURL)
@@ -1169,13 +1218,17 @@ extension NotesModel {
         notes.filter { !$0.trashed && !$0.locked && !$0.encrypted }
             .compactMap { record in loaded[record.id].map { (record: record, document: $0) } }
     }
+    /// The index notes deleted in Samsung are told from; none before the account's notes are listed.
+    var appleIndex: AppleNotesSync.SamsungIndex? {
+        account.isEmpty || notes.isEmpty ? nil : AppleNotesSync.SamsungIndex(account: account, notes: notes)
+    }
     func syncAppleNotes() async {
         guard !busy else { return }
         preserveDraft()
         busy = true; status = "Syncing with Apple Notes…"
         defer { busy = false }
         do {
-            let report = try await AppleNotesSync.run(appleSyncItems, drafts: drafts) { asset, document in
+            let report = try await AppleNotesSync.run(appleSyncItems, drafts: drafts, index: appleIndex) { asset, document in
                 try? await self.attachmentData(asset, document: document)
             }
             if let id = selection, report.imported.contains(id), let document = loaded[id] { try present(document) }
@@ -1270,6 +1323,76 @@ extension AppleNotesSelfTest {
             throw NotesError.message("The Samsung change was not written: \(report.summary)")
         }
         return "Apple Notes live test passed: read-only pass writes nothing, live Apple edit → draft, newer edit replaces it, text typed here kept, saved edit → no rewrite, Samsung change → pending → written."
+    }
+
+    /// Notes deleted in Samsung, on a copy of a real NoteStore.sqlite: trashed or deleted there → Recently Deleted
+    /// in Notes (after a write pass), edited in Notes first → kept, another account's index or a note merely not
+    /// downloaded → untouched, and a mirror from before 1.2.0-rc.2 adopts the account it was made with.
+    static func deletions(_ path: String) async throws -> String {
+        guard path != AppleNoteStore.defaultPath else { throw NotesError.message("Run the deletion test on a copy of the Notes store.") }
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("scn-apple-delete-" + UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mirrorURL = dir.appendingPathComponent("mirror.json"), drafts = NoteDraftStore(root: dir)
+        let rich = try RichText.parse(RichTextSelfTest.encoded, orderData: RichTextSelfTest.order)
+        var docs: [String: CloudDocument] = [:], records: [String: NoteRecord] = [:]
+        for name in ["A", "B", "C", "D"] {
+            let doc = try document("d1", body: rich.withText(rich.text + "\nNote " + name), id: "scndel" + name)
+            docs[name] = doc
+            records[name] = NoteRecord(id: doc.serverID, resourceID: "", commit: "d1", modified: Date().timeIntervalSince1970 * 1000, locked: false, encrypted: false)
+        }
+        func sync(_ synced: [String], index: [String], trashed: [String] = [], account: String = "Test", writes: Bool = true) async throws -> AppleNotesSync.Report {
+            let notes = index.map { name -> NoteRecord in var record = records[name]!; record.trashed = trashed.contains(name); return record }
+            return try await AppleNotesSync.run(synced.map { (record: records[$0]!, document: docs[$0]!) }, drafts: drafts, path: path, mirrorURL: mirrorURL,
+                                                manageNotesApp: false, writes: writes, index: AppleNotesSync.SamsungIndex(account: account, notes: notes))
+        }
+        let store = try AppleNoteStore(path: path)
+        var identifiers: [String: String] = [:]
+        func apple(_ name: String) throws -> AppleNoteStore.Found {
+            guard let identifier = AppleMirror.load(mirrorURL).notes[docs[name]!.serverID]?.identifier ?? identifiers[name],
+                  let found = try store.find(identifier: identifier) else { throw NotesError.message("Test note \(name) vanished.") }
+            return found
+        }
+        var report = try await sync(["A", "B", "C", "D"], index: ["A", "B", "C", "D"])
+        guard report.created == 4 else { throw NotesError.message("Deletion test notes were not created: \(report.summary)") }
+        for name in ["A", "B", "C", "D"] { identifiers[name] = AppleMirror.load(mirrorURL).notes[docs[name]!.serverID]?.identifier }
+        // A mirror made before 1.2.0-rc.2 has no account; it adopts the one whose index lists its notes.
+        var old = AppleMirror.load(mirrorURL); old.account = nil; try old.save(mirrorURL)
+        report = try await sync(["A", "B", "C", "D"], index: ["A", "B", "C", "D"])
+        guard AppleMirror.load(mirrorURL).account == AppleNotesSync.SamsungIndex(account: "Test", notes: []).account else {
+            throw NotesError.message("An older mirror did not adopt its account.")
+        }
+        // Moved to Samsung's trash: left for a write pass, then moved to Recently Deleted.
+        report = try await sync(["B", "C", "D"], index: ["A", "B", "C", "D"], trashed: ["A"], writes: false)
+        guard report.pendingWrites == 1, report.deleted == 0, try !apple("A").deleted else {
+            throw NotesError.message("A read-only pass deleted a note: \(report.summary)")
+        }
+        report = try await sync(["B", "C", "D"], index: ["A", "B", "C", "D"], trashed: ["A"])
+        guard report.deleted == 1, try apple("A").deleted, AppleMirror.load(mirrorURL).notes[docs["A"]!.serverID] == nil,
+              let trashFolder = try store.db.rows("select ZFOLDER from ZICCLOUDSYNCINGOBJECT where Z_PK=?", [.int(try apple("A").pk)]).first?["ZFOLDER"]?.int,
+              try store.db.rows("select ZIDENTIFIER from ZICCLOUDSYNCINGOBJECT where Z_PK=?", [.int(trashFolder)]).first?["ZIDENTIFIER"]?.string == "TrashFolder-LocalAccount" else {
+            throw NotesError.message("A note trashed in Samsung did not reach Recently Deleted: \(report.summary)")
+        }
+        // Edited in Notes, then deleted in Samsung: kept in Notes, no longer linked.
+        try store.transaction { try store.replace(try apple("B"), with: AppleExport(title: "Shopping", body: rich.text + "\nEdited on the Mac", rich: nil), modified: Date()) }
+        report = try await sync(["C", "D"], index: ["A", "C", "D"], trashed: ["A"])
+        guard report.unlinked == [docs["B"]!.serverID], report.deleted == 0, try !apple("B").deleted,
+              AppleMirror.load(mirrorURL).notes[docs["B"]!.serverID] == nil else {
+            throw NotesError.message("A note edited in Notes was deleted with its Samsung note: \(report.summary)")
+        }
+        // Listed but not downloaded (not synced), or missing from another account's index: untouched.
+        report = try await sync(["C"], index: ["A", "C", "D"], trashed: ["A"])
+        guard report.deleted == 0, try !apple("D").deleted else { throw NotesError.message("A note not downloaded yet was deleted: \(report.summary)") }
+        report = try await sync([], index: ["A"], account: "Other")
+        guard report.deleted == 0, try !apple("C").deleted, try !apple("D").deleted else {
+            throw NotesError.message("Another account's index deleted notes: \(report.summary)")
+        }
+        // Deleted for good in Samsung (gone from the index): Recently Deleted.
+        report = try await sync([], index: ["A"], trashed: ["A"])
+        guard report.deleted == 2, try apple("C").deleted, try apple("D").deleted, AppleMirror.load(mirrorURL).notes.isEmpty else {
+            throw NotesError.message("Notes deleted in Samsung stayed in Apple Notes: \(report.summary)")
+        }
+        return "Apple Notes deletion test passed: older mirror adopts its account, trashed in Samsung → pending → Recently Deleted, edited in Notes → kept, not downloaded or another account → untouched, deleted in Samsung → Recently Deleted."
     }
 
     /// The self-test note plus a picture and a 2×2 table anchored on U+FFFC, as Samsung writes them

@@ -162,6 +162,7 @@ import Combine
         defer { busy = false }
         do {
             let previous = Dictionary(uniqueKeysWithValues: notes.map { ($0.id, $0.commit) })
+            let previousActive = Set(notes.filter { !$0.trashed }.map(\.id))
             let index = try await client.loadIndex()
             lastCheck = Date()
             notes = index.notes; folders = index.folders
@@ -196,7 +197,8 @@ import Combine
             if let id = selection, !dirty, document?.serverID != id || document?.commit != notes.first(where: { $0.id == id })?.commit { await open(id) }
             status = "\(notes.filter { !$0.trashed }.count) notes · Updated \(Date().formatted(date: .omitted, time: .shortened))"
             if failures > 0 { status += " · \(failures) notes could not be downloaded" }
-            if notes.contains(where: { previous[$0.id] != $0.commit }) { onCloudChanges?() }
+            // Edited, added, or deleted and trashed (no new revision then) on other devices.
+            if notes.contains(where: { previous[$0.id] != $0.commit }) || Set(notes.filter { !$0.trashed }.map(\.id)) != previousActive { onCloudChanges?() }
         } catch let error as SamsungHTTPError where error.path.hasPrefix("/auth/oauth2/") && [400, 401, 403].contains(error.status) {
             status = "Samsung sign-in expired · Cached notes and drafts retained. Choose Sign in with Samsung to reconnect."
         } catch {

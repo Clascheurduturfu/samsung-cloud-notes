@@ -127,6 +127,56 @@ struct NoteRecord: Identifiable, Codable {
     var trashed: Bool = false
 }
 struct FolderRecord: Identifiable, Codable { var id: String; var name: String; var parent: String }
+struct FolderRow: Identifiable {
+    let folder: FolderRecord
+    let depth: Int
+    var id: String { folder.id }
+}
+
+func folderRows(_ folders: [FolderRecord]) -> [FolderRow] {
+    let ids = Set(folders.map(\.id))
+    var visited = Set<String>()
+    var rows: [FolderRow] = []
+    func append(_ folder: FolderRecord, depth: Int) {
+        guard visited.insert(folder.id).inserted else { return }
+        rows.append(FolderRow(folder: folder, depth: depth))
+        for child in folders where child.parent == folder.id { append(child, depth: depth + 1) }
+    }
+    for folder in folders where !ids.contains(folder.parent) { append(folder, depth: 0) }
+    for folder in folders { append(folder, depth: 0) }
+    return rows
+}
+
+func visibleFolderRows(_ rows: [FolderRow], collapsed: Set<String>) -> [FolderRow] {
+    var hiddenBelow: Int?
+    return rows.filter { row in
+        if let depth = hiddenBelow {
+            if row.depth > depth { return false }
+            hiddenBelow = nil
+        }
+        if collapsed.contains(row.id) { hiddenBelow = row.depth }
+        return true
+    }
+}
+
+func applyFolderIndex(_ folderData: Data, notes: inout [String: NoteRecord]) throws -> [FolderRecord] {
+    let folderXML = try XMLDocument(data: folderData, options: [.nodeLoadExternalEntitiesNever])
+    var folders: [FolderRecord] = []
+    for node in (try folderXML.rootElement()?.first("folderResource")?.nodes(forXPath: ".//node") ?? []).compactMap({ $0 as? XMLElement }) {
+        let state = node.value("state")
+        if node.attr("type") == "folder", state == "normal" {
+            folders.append(FolderRecord(id: node.attr("id"), name: decodedCloudName(node.value("name")), parent: node.value("parentFolderNodeId")))
+        } else if node.attr("type") == "note" {
+            if let id = notes.values.first(where: { $0.resourceID == node.attr("id") })?.id {
+                notes[id]?.folder = node.value("parentFolderNodeId")
+                notes[id]?.trashed = state == "trashed"
+                if state == "deleted" { notes.removeValue(forKey: id) }
+            }
+        }
+    }
+    return folders
+}
+
 struct CloudIndex: Codable { var notes: [NoteRecord]; var folders: [FolderRecord] }
 func decodedCloudName(_ value: String) -> String {
     guard let data = Data(base64Encoded: value), let decoded = String(data: data, encoding: .utf8),
@@ -377,20 +427,7 @@ final class CloudClient {
         guard completed else { throw NotesError.message("The note index exceeded the pagination limit.") }
         var components = URLComponents(); components.queryItems = [URLQueryItem(name: "lastChangePoint", value: Self.initialCursor("FOLDER"))]
         let folderData = try await request("/samsungnotes/v1/folder/changes?" + components.percentEncodedQuery!)
-        let folderXML = try XMLDocument(data: folderData, options: [.nodeLoadExternalEntitiesNever])
-        var folders: [FolderRecord] = []
-        for node in folderXML.rootElement()?.first("folderResource")?.first("nodeList")?.elements(forName: "node") ?? [] {
-            let state = node.value("state")
-            if node.attr("type") == "folder", state == "normal" {
-                folders.append(FolderRecord(id: node.attr("id"), name: decodedCloudName(node.value("name")), parent: node.value("parentFolderNodeId")))
-            } else if node.attr("type") == "note" {
-                if let id = notes.values.first(where: { $0.resourceID == node.attr("id") })?.id {
-                    notes[id]?.folder = node.value("parentFolderNodeId")
-                    notes[id]?.trashed = state == "trashed"
-                    if state == "deleted" { notes.removeValue(forKey: id) }
-                }
-            }
-        }
+        let folders = try applyFolderIndex(folderData, notes: &notes)
         return CloudIndex(notes: notes.values.sorted { $0.modified > $1.modified }, folders: folders.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending })
     }
     func download(_ id: String) async throws -> CloudDocument {

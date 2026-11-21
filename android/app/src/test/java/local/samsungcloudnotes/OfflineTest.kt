@@ -16,6 +16,14 @@ import org.junit.Test
 class OfflineTest {
     private val fixtureXml = "<CompareNoteView><noteResource isLocked=\"false\" isEncrypted=\"false\" unknownField=\"retain\"><noteTree ver=\"4000\"><bodyText id=\"body\" h=\"old\" t=\"0\"/></noteTree><attributes><title><object/></title></attributes><bodyText id=\"body\"><object type=\"textBox\" hash=\"old\"><spanOrderDataList><spanOrderData val=\"stale\"/></spanOrderDataList><zeroLengthSpanList><zeroLengthSpan val=\"stale-zero\"/></zeroLengthSpanList><text>${StyledText.encode("Before")}</text></object></bodyText><pageList><page id=\"page\"><opaqueDrawing value=\"preserve\"/></page></pageList><contentFileList><contentFile id=\"asset\" hash=\"original\"/></contentFileList></noteResource><commitId>fixture-revision</commitId><downloadUrls/></CompareNoteView>"
 
+    @Test fun nestedFolderNodesAndHierarchy() {
+        val xml = XmlDocument("<root><folderResource><nodeList><node type=\"folder\" id=\"a\"><nodeList><node type=\"folder\" id=\"b\"/><node type=\"note\" id=\"n\"/></nodeList></node></nodeList></folderResource></root>".toByteArray())
+        assertEquals(3, xml.rootElement()!!.first("folderResource")!!.descendants("node").size)
+        val rows = folderRows(listOf(FolderRecord("b", "Child", "a"), FolderRecord("a", "Parent", "root"), FolderRecord("c", "Orphan", "missing")))
+        assertEquals(listOf("a", "b", "c"), rows.map { it.folder.id })
+        assertEquals(listOf(0, 1, 0), rows.map { it.depth })
+    }
+
     @Test fun pkceReferenceVector() {
         assertEquals("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", SamsungAuthCrypto.challenge("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"))
     }

@@ -35,7 +35,7 @@ Preview release for **macOS, iOS and the standalone Android client**.
   - **Samsung changes are written into Notes as soon as Notes has been idle for a few seconds.** Writing still needs Notes closed for a moment. It reopens behind the current app, or in front if it was in front, and only if it was running.
   - Notes is closed only when something must actually be written. An Apple edit saved back to Samsung no longer rewrites the Apple copy.
   - **Typing a note in this app closes Notes**, so one note is never edited in two places. Notes comes back in the background once the edit is saved and written.
-- Pull requests #2 (nested folders) and #3 (sticky-memo previews) are merged.
+- Pull requests #2 (nested folders) and #3 (sticky-memo previews) by **Anup Yadav** ([@yanup2913](https://github.com/yanup2913)) are merged.
 
 ## 1.2.0-beta.7 (pictures and tables sync) — 2026-11-18
 
@@ -49,7 +49,7 @@ Preview release for **macOS, iOS and the standalone Android client**.
   - The object is removed from the note and its hash tree, along with its picture file when nothing else uses it.
   - Previously the attachment stayed behind with an anchor pointing at plain text.
 - **Picture anchors stay on their picture.** Text typed right after a picture or table no longer joins its anchor, and anchors stretched by earlier betas are repaired on save.
-- Includes contributed pull requests, for testing:
+- Includes pull requests contributed by **Anup Yadav** ([@yanup2913](https://github.com/yanup2913)), for testing:
   - **Nested folders** (#2): subfolders and their notes are listed, and folder trees collapse on the Mac.
   - **Sticky-memo previews** (#3): handwriting preview and a save button for attached `.sdocx` notes on the Mac.
 

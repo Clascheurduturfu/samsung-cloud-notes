@@ -25,11 +25,31 @@ extension NotesModel {
             NSWorkspace.shared.activateFileViewerSelecting([destination]); status = "Exported original document and \(document.assets.count) attachments."
         } catch { self.error = "Export did not finish: " + error.localizedDescription }
     }
+    func saveAttachment(_ asset: AssetRecord) async {
+        guard let document else { return }
+        let panel = NSSavePanel()
+        panel.title = "Save attachment"
+        panel.nameFieldStringValue = safeName(asset.fileName)
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        do {
+            let data = try await attachmentData(asset, document: document)
+            try data.write(to: destination, options: [.atomic])
+            status = "Attachment saved."
+        } catch { self.error = "Could not save attachment: " + error.localizedDescription }
+    }
     func showAttachment(_ asset: AssetRecord) async {
         guard let document else { return }
         do {
             guard !asset.isInternal else { throw NotesError.message("This is an internal Samsung page resource. Use the drawing preview or export the original document.") }
             let data = try await attachmentData(asset, document: document)
+            if (asset.fileName as NSString).pathExtension.lowercased() == "sdocx" {
+                let pdf = try await Task.detached(priority: .userInitiated) { try StickyMemoPreview.render(data) }.value
+                let url = try LocalStore.directory("Previews").appendingPathComponent(safeName(asset.id) + "-handwriting.pdf")
+                try pdf.write(to: url, options: [.atomic])
+                guard NSWorkspace.shared.open(url) else { throw NotesError.message("Could not open the handwriting preview.") }
+                status = "Handwriting preview opened · text and other objects are not included."
+                return
+            }
             let ext: String
             if data.starts(with: [0x89,0x50,0x4e,0x47]) { ext = ".png" }
             else if data.starts(with: [0xff,0xd8,0xff]) { ext = ".jpg" }
@@ -135,7 +155,12 @@ struct NotesView: View {
                         ScrollView(.horizontal) { HStack {
                             Image(systemName: "paperclip")
                             ForEach(document.assets.filter { !$0.isInternal }) { asset in
-                                Button(asset.fileName) { Task { await model.showAttachment(asset) } }.lineLimit(1)
+                                HStack(spacing: 3) {
+                                    Button(asset.fileName) { Task { await model.showAttachment(asset) } }.lineLimit(1)
+                                    Button { Task { await model.saveAttachment(asset) } } label: { Image(systemName: "square.and.arrow.down") }
+                                        .help("Save \(asset.fileName)")
+                                        .accessibilityLabel("Save \(asset.fileName)")
+                                }
                             }
                         }.padding(10) }
                     }
@@ -238,7 +263,7 @@ struct NotesView: View {
             catch { fputs("Session import failed: \(error.localizedDescription)\n", stderr); exit(1) }
         }
         if CommandLine.arguments.contains("--self-test") {
-            do { try SelfTest.run(); try NotesUpdateSelfTest.run(); print("Offline self-tests passed."); exit(0) }
+            do { try SelfTest.run(); try StickyMemoPreview.selfTest(); try NotesUpdateSelfTest.run(); print("Offline self-tests passed."); exit(0) }
             catch { fputs("Self-test failed: \(error.localizedDescription)\n", stderr); exit(1) }
         }
         if CommandLine.arguments.contains("--verify-signout") {

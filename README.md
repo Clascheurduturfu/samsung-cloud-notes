@@ -167,6 +167,7 @@ flowchart LR
 
 ## Credits
 
+- **[Anup Yadav (@yanup2913)](https://github.com/yanup2913)** contributed nested folders with collapsible folder trees ([#2](https://github.com/Clascheurduturfu/samsung-cloud-notes/pull/2)) and sticky-memo handwriting previews with attachment saving ([#3](https://github.com/Clascheurduturfu/samsung-cloud-notes/pull/3)).
 - **[Charles Bel / samsung-re-health](https://github.com/charlesbel/samsung-re-health)** — MIT-licensed account bootstrap, browser encryption and SCSP exchange informed the Swift adaptation in `Sources/Shared/Authentication.swift` and its Kotlin port in `android/app/src/main/java/local/samsungcloudnotes/Auth.kt`. Its [full license](docs/third-party/samsung-re-health-LICENSE.txt) is retained and bundled in Mac, iOS and Android builds.
 - **[twangodev / sdocx](https://github.com/twangodev/sdocx)** — published format research helped interpret stroke framing and point channels. No upstream sdocx code is bundled.
 - **[Mhemd139 / Inkport](https://github.com/Mhemd139/Samsung_Notes)** — useful reference for Samsung Notes file-viewing workflows; no upstream code is bundled.
